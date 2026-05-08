@@ -59,7 +59,7 @@ jobs:
           ./build.sh build hook-default-${{ matrix.arch }}
       - name: Verify outputs
         run: |
-          ls -lah hook/out/linuxkit-hook-default-${{ matrix.arch }}/
+          ls -lah out/linuxkit-hook-default-${{ matrix.arch }}/
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
