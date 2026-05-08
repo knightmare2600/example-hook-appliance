@@ -2,7 +2,6 @@ name: Build Hook Appliance
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - main
@@ -42,13 +41,14 @@ jobs:
           cp overlay/inventory.sh hook/images/hook-embedded/
           chmod +x hook/images/hook-embedded/inventory.sh
 
+      ## Hook kernel Dockerfile currently misses `make`
+      ## on newer Debian toolchains.
       - name: Patch Hook kernel builder
         run: |
           cd hook
           sed -i 's/crossbuild-essential-arm64/crossbuild-essential-arm64 make/' kernel/Dockerfile
 
-      ## Build kernel LOCALLY.
-      ## This avoids broken/missing upstream OCI manifests.
+      ## Build kernel locally to avoid broken upstream manifests
       - name: Build kernel locally
         run: |
           cd hook
@@ -59,13 +59,13 @@ jobs:
           ./build.sh build hook-default-${{ matrix.arch }}
       - name: Verify outputs
         run: |
-          ls -lah out/linuxkit-hook-default-${{ matrix.arch }}/
+          ls -lah hook/out/linuxkit-hook-default-${{ matrix.arch }}/
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: hook-${{ matrix.arch }}
           path: |
-            out/linuxkit-hook-default-${{ matrix.arch }}/hook-kernel
-            out/linuxkit-hook-default-${{ matrix.arch }}/hook-initrd.img
-            out/linuxkit-hook-default-${{ matrix.arch }}/hook-cmdline
+            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-kernel
+            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-initrd.img
+            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-cmdline
           if-no-files-found: error
