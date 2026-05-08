@@ -1,0 +1,63 @@
+name: Build Hook Appliance
+
+on:
+
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-24.04
+
+    strategy:
+      matrix:
+        arch:
+          - amd64
+          - arm64
+
+    steps:
+
+      - name: Checkout appliance repo
+        uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt update
+          sudo apt install -y docker.io qemu-user-static binfmt-support
+
+      - name: Configure buildx
+        run: |
+          docker buildx create --use
+          docker buildx inspect --bootstrap
+
+      - name: Clone Hook
+        run: |
+          git clone https://github.com/tinkerbell/hook.git
+
+      - name: Checkout Hook version
+        run: |
+          cd hook
+          git checkout v0.11.1
+
+      - name: Inject inventory script
+        run: |
+          cp overlay/inventory.sh hook/images/hook-embedded/
+
+      - name: Build Hook
+        run: |
+          cd hook
+          ./build.sh build hook-default-${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hook-${{ matrix.arch }}
+          path: |
+            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-kernel
+            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-initrd.img
+            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-cmdline
