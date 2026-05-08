@@ -65,8 +65,7 @@ jobs:
         with:
           name: hook-${{ matrix.arch }}
           path: |
-            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-kernel
-            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-initrd.img
-            hook/out/linuxkit-hook-default-${{ matrix.arch }}/hook-cmdline
-
+            out/linuxkit-hook-default-${{ matrix.arch }}/hook-kernel
+            out/linuxkit-hook-default-${{ matrix.arch }}/hook-initrd.img
+            out/linuxkit-hook-default-${{ matrix.arch }}/hook-cmdline
           if-no-files-found: error
