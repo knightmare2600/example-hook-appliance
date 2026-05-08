@@ -1,0 +1,33 @@
+name: Prebuild Hook Kernel
+
+on:
+  workflow_dispatch:
+
+env:
+  HOOK_VERSION: v0.11.1
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Clone Hook
+        run: |
+          git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
+      - name: Build kernel
+        run: |
+          cd hook
+          ./build.sh kernel hook-default-amd64
+      - name: Save kernel cache
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            hook/out/kernel
+            hook/cache/docker
+          key: hook-kernel-amd64-${{ env.HOOK_VERSION }}-5.10.255
