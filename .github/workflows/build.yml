@@ -42,6 +42,11 @@ jobs:
           cp overlay/inventory.sh hook/images/hook-embedded/
           chmod +x hook/images/hook-embedded/inventory.sh
 
+      - name: Patch Hook kernel builder
+        run: |
+          cd hook
+          sed -i 's/crossbuild-essential-arm64/crossbuild-essential-arm64 make/' kernel/Dockerfile
+
       ## Build kernel LOCALLY.
       ## This avoids broken/missing upstream OCI manifests.
       - name: Build kernel locally
