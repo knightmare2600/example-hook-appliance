@@ -1,0 +1,10 @@
+#!ipxe
+
+cpuid --ext 29 && set arch amd64 || set arch arm64
+
+set base http://192.168.139.50/hook/${arch}
+
+kernel ${base}/hook-kernel initrd=hook-initrd.img console=tty0 console=ttyS0
+initrd ${base}/hook-initrd.img
+
+boot
