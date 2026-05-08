@@ -25,15 +25,11 @@ jobs:
       - name: Checkout appliance repo
         uses: actions/checkout@v4
 
-      - name: Install packages
-        run: |
-          sudo apt update
-          sudo apt install -y docker.io qemu-user-static binfmt-support
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Configure buildx
-        run: |
-          docker buildx create --use
-          docker buildx inspect --bootstrap
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Clone Hook
         run: |
@@ -46,7 +42,8 @@ jobs:
 
       - name: Inject inventory script
         run: |
-          cp overlay/inventory.sh hook/images/hook-embedded/
+          cp overlay/inventory.sh \
+            hook/images/hook-embedded/
 
       - name: Build Hook
         run: |
