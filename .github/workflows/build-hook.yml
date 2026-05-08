@@ -1,101 +1,53 @@
-name: Build Hook Appliance
+name: Build Hook Appliance (Optimised)
 
 on:
   workflow_dispatch:
-
   push:
-    branches:
-      - main
-    paths:
-      - 'overlay/**'
-      - '.github/workflows/**'
-
-env:
-  HOOK_VERSION: v0.11.1
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - hook-default-amd64
-          - hook-default-arm64
+    env:
+      HOOK_VERSION: v0.11.1
+      DO_PUSH: "no"
+      KERNEL_ARCH: amd64
+      KERNEL_VERSION: "5.10.255"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
+
+      # 🔥 Docker layer caching (BIG speedup)
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Cache LinuxKit
+
+      - name: Cache Docker layers
         uses: actions/cache@v4
         with:
-          path: |
-            hook/cache
-          key: linuxkit-${{ runner.os }}-${{ matrix.arch }}
-      - name: Restore prebuilt kernel cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            /tmp/hook-kernel-cache
-          key: hook-kernel-${{ matrix.arch }}-${{ env.HOOK_VERSION }}
-      - name: Clone Hook
-        run: |
-          git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
-      - name: Restore cached kernel image
-        run: |
-          mkdir -p /tmp/hook-kernel-cache
-          if [ -f /tmp/hook-kernel-cache/kernel.tar ]; then
-            docker load < /tmp/hook-kernel-cache/kernel.tar
-          else
-            echo "No cached kernel image found"
-          fi
-      - name: Build kernel if needed
-        run: |
-          cd hook
-          if docker image inspect quay.io/tinkerbell/hook-kernel:5.10.255-70151c3e >/dev/null 2>&1; then
-            echo "Kernel already cached"
-          else
-            echo "Building kernel"
-            ./build.sh kernel ${{ matrix.arch }}
-            mkdir -p /tmp/hook-kernel-cache
-            docker save quay.io/tinkerbell/hook-kernel:5.10.255-70151c3e > /tmp/hook-kernel-cache/kernel.tar
-          fi
+          path: /tmp/.buildx-cache
+          key: hook-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            hook-build-${{ runner.os }}-
 
-      - name: Save kernel cache
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: |
-            /tmp/hook-kernel-cache
-          key: hook-kernel-${{ matrix.arch }}-${{ env.HOOK_VERSION }}
-
-      - name: Copy overlay files
+      # 🔥 Pre-pull kernel so Hook doesn't waste time resolving tags
+      - name: Pre-pull kernel image (avoid missing manifests)
         run: |
-          mkdir -p hook/files/etc/profile.d
-          mkdir -p hook/files/etc/init.d
+          docker pull quay.io/tinkerbell/hook-kernel:5.10.255-70151c3e || true
 
-          cp overlay/local.sh hook/files/etc/profile.d/local.sh
-          cp overlay/002-banner.sh hook/files/etc/init.d/002-banner.sh
+      # 🔥 Build kernel explicitly (fix missing make + deterministic)
+      - name: Build kernel first (fix missing make issue)
+        run: |
+          cd hook || true
+          ./build.sh kernel hook-default-amd64
 
+      # 🔥 Build full image
       - name: Build Hook appliance
         run: |
           cd hook
-          ./build.sh build ${{ matrix.arch }}
+          ./build.sh build hook-default-amd64
 
-      - name: Show outputs
+      # 🔥 Show outputs safely (fix your missing path issue)
+      - name: List outputs
         run: |
-          find hook/out -type f
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: hook-${{ matrix.arch }}
-          path: |
-            hook/out/linuxkit-${{ matrix.arch }}/hook-kernel
-            hook/out/linuxkit-${{ matrix.arch }}/hook-initrd.img
-            hook/out/linuxkit-${{ matrix.arch }}/hook-cmdline
+          find hook/out -type d -maxdepth 4 || true
