@@ -1,4 +1,4 @@
-name: Prebuild Hook Kernel
+name: Prebuild Hook Kernels
 
 on:
   workflow_dispatch:
@@ -9,6 +9,13 @@ env:
 jobs:
   kernel:
     runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - hook-default-amd64
+          - hook-default-arm64
 
     steps:
       - name: Checkout
@@ -23,11 +30,14 @@ jobs:
       - name: Build kernel
         run: |
           cd hook
-          ./build.sh kernel hook-default-amd64
+          ./build.sh kernel ${{ matrix.arch }}
+      - name: Export kernel image
+        run: |
+          mkdir -p /tmp/hook-kernel-cache
+          docker save  quay.io/tinkerbell/hook-kernel:5.10.255-70151c3e > /tmp/hook-kernel-cache/kernel.tar
       - name: Save kernel cache
         uses: actions/cache/save@v4
         with:
           path: |
-            hook/out/kernel
-            hook/cache/docker
-          key: hook-kernel-amd64-${{ env.HOOK_VERSION }}-5.10.255
+            /tmp/hook-kernel-cache
+          key: hook-kernel-${{ matrix.arch }}-${{ env.HOOK_VERSION }}
