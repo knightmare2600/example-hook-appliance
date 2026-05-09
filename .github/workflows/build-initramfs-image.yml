@@ -49,12 +49,10 @@ jobs:
           cp /bin/busybox initrd/rootfs/bin/
           chmod +x initrd/rootfs/bin/busybox
 
-      - name: Copy required binaries (safe model)
+      - name: Install tools into staged rootfs
         run: |
-          cp stage/${{ matrix.arch }}/usr/sbin/ipmitool initrd/rootfs/usr/sbin/ || true
-          cp stage/${{ matrix.arch }}/usr/bin/dmidecode initrd/rootfs/usr/bin/ || true
-          cp stage/${{ matrix.arch }}/usr/bin/lspci initrd/rootfs/usr/bin/ || true
-
+          sudo chroot stage/${{ matrix.arch }} /bin/bash -c "apt-get update && apt-get install -y ipmitool dmidecode pciutils iproute2 grc tmux vim.tiny && apt-get clean"
+          
       - name: Install init script from repo
         run: |
           cp initramfs/init initrd/rootfs/init
