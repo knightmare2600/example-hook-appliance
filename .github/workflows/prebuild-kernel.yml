@@ -1,4 +1,4 @@
-name: Kernel Build (Precompiled)
+name: Kernel Build (Fast Precompiled)
 
 on:
   workflow_dispatch:
@@ -16,41 +16,99 @@ jobs:
         include:
           - arch: x86_64
             out: amd64
+            cross: ""
           - arch: arm64
             out: arm64
+            cross: aarch64-linux-gnu-
 
     steps:
-      - name: Install build deps (THIS is where make belongs)
+      # -----------------------------
+      # 1. Build dependencies
+      # -----------------------------
+      - name: Install build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             make gcc g++ bc bison flex \
             libssl-dev libelf-dev build-essential \
-            curl xz-utils git
+            curl xz-utils git \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            ccache
 
+      # -----------------------------
+      # 2. Enable compiler cache
+      # -----------------------------
+      - name: Setup ccache
+        run: |
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+          echo "CC='ccache gcc'" >> $GITHUB_ENV
+          echo "CXX='ccache g++'" >> $GITHUB_ENV
+
+      # -----------------------------
+      # 3. Cache kernel source + build artifacts
+      # -----------------------------
+      - name: Cache kernel source
+        uses: actions/cache@v4
+        with:
+          path: linux
+          key: linux-${{ env.KERNEL_VERSION }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ matrix.out }}-${{ env.KERNEL_VERSION }}
+
+      # -----------------------------
+      # 4. Fetch kernel (only if not cached)
+      # -----------------------------
       - name: Fetch kernel
         run: |
-          curl -LO https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${KERNEL_VERSION}.tar.xz
-          tar -xf linux-${KERNEL_VERSION}.tar.xz
-          mv linux-${KERNEL_VERSION} linux
+          if [ ! -d linux ]; then
+            curl -LO https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${KERNEL_VERSION}.tar.xz
+            tar -xf linux-${KERNEL_VERSION}.tar.xz
+            mv linux-${KERNEL_VERSION} linux
+          fi
 
+      # -----------------------------
+      # 5. Configure kernel
+      # -----------------------------
       - name: Configure kernel
         run: |
           cd linux
-          cp ../configs/${{ matrix.out }}.config .config || make defconfig
-          make ARCH=${{ matrix.arch }} olddefconfig
 
+          if [ -f ../configs/${{ matrix.out }}.config ]; then
+            cp ../configs/${{ matrix.out }}.config .config
+          else
+            make defconfig
+          fi
+
+          make ARCH=${{ matrix.arch }} CROSS_COMPILE=${{ matrix.cross }} olddefconfig
+
+      # -----------------------------
+      # 6. Build kernel (FAST path via ccache)
+      # -----------------------------
       - name: Build kernel
         run: |
           cd linux
-          make -j$(nproc) ARCH=${{ matrix.arch }}
+          make -j$(nproc) \
+            ARCH=${{ matrix.arch }} \
+            CROSS_COMPILE=${{ matrix.cross }}
 
+      # -----------------------------
+      # 7. Package output
+      # -----------------------------
       - name: Package kernel
         run: |
-          tar -czf kernel-${{ matrix.out }}.tar.gz linux/arch/${{ matrix.arch }}/boot
+          mkdir -p out
+          tar -czf out/kernel-${{ matrix.out }}.tar.gz \
+            linux/arch/${{ matrix.arch }}/boot
 
+      # -----------------------------
+      # 8. Upload artifact
+      # -----------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.out }}
-          path: kernel-${{ matrix.out }}.tar.gz
+          path: out/kernel-${{ matrix.out }}.tar.gz
