@@ -20,10 +20,14 @@ jobs:
       - name: Checkout Hook
         uses: actions/checkout@v4
 
+      # TEMPORARY: hardcoded kernel build run-id
+      # Replace with GitHub Releases / artifact registry later
       - name: Download prebuilt kernel
         uses: actions/download-artifact@v4
         with:
           name: kernel-${{ matrix.kernel }}
+          run-id: 25605053942
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract kernel into Hook cache
         run: |
