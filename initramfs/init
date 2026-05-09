@@ -64,4 +64,13 @@ fi
 echo
 echo "[runtime] provisioning runtime complete"
 
+echo
+echo "[ssh] generating host keys"
+
+ssh-keygen -A || true
+
+mkdir -p /run/sshd
+echo "[ssh] starting ssh daemon"
+/usr/sbin/sshd
+
 exec /bin/bash
