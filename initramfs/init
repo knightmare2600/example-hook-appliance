@@ -2,8 +2,10 @@
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# bind console early (CRITICAL for ssh + ioctl + prompts)
-exec </dev/console >/dev/console 2>&1
+set +e
+
+# CRITICAL: do NOT early bind console with exec (can destabilise PID 1)
+exec 0</dev/console 1>/dev/console 2>&1
 
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
@@ -14,9 +16,9 @@ echo "[runtime] provisioning runtime booted"
 hostname provisioner
 
 echo "[runtime] bringing up loopback"
-ip link set lo up || true
+ip link set lo up 2>/dev/null || true
 
-# Bring up all NICs
+# Bring up NICs safely
 for i in /sys/class/net/*; do
     iface=$(basename "$i")
 
@@ -24,44 +26,42 @@ for i in /sys/class/net/*; do
 
     echo "[network] bringing up $iface"
 
-    ip link set "$iface" up || true
-    dhclient "$iface" || true
+    ip link set "$iface" up 2>/dev/null || true
+    dhclient "$iface" 2>/dev/null || true
 done
 
 echo
 echo "[runtime] detected interfaces:"
-ip addr || true
+ip addr 2>/dev/null || true
 
 echo
 echo "[runtime] storage inventory:"
-lsblk || true
+lsblk 2>/dev/null || true
 
 echo
 echo "[runtime] PCI devices:"
-lspci || true
+lspci 2>/dev/null || true
 
 echo
 echo "[runtime] DMI inventory:"
-dmidecode || true
+dmidecode 2>/dev/null || true
 
 echo
 echo "[runtime] RAID inventory:"
-cat /proc/mdstat || true
+cat /proc/mdstat 2>/dev/null || true
 
 echo
 echo "[runtime] NVMe inventory:"
-nvme list || true
+nvme list 2>/dev/null || true
 
 # Optional overlay
 if [ -f /overlay/inventory.sh ]; then
-    echo
     echo "[runtime] running overlay inventory script"
     bash /overlay/inventory.sh || true
 fi
 
 # Optional collector
 if [ -f /collector/collector.py ]; then
-    echo
     echo "[runtime] running collector"
     python3 /collector/collector.py || true
 fi
@@ -70,14 +70,19 @@ echo
 echo "[runtime] provisioning runtime complete"
 
 # SSH setup
-echo
 echo "[ssh] generating host keys"
-ssh-keygen -A || true
+ssh-keygen -A 2>/dev/null || true
 
 mkdir -p /run/sshd
 
 echo "[ssh] starting ssh daemon"
-/usr/sbin/sshd || true
+/usr/sbin/sshd 2>/dev/null || true
 
-# final shell
-exec setsid cttyhack /bin/bash
+# FINAL SAFETY NET (CRITICAL)
+echo "[runtime] entering persistent shell"
+
+while true; do
+    setsid cttyhack /bin/bash
+    echo "[runtime] shell exited, respawning..."
+    sleep 1
+done
