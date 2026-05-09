@@ -82,7 +82,7 @@ jobs:
               python3-pip \
               kbd \
               console-setup \
-              fbset
+              fbset util-linux login
 
             apt-get clean
           "
