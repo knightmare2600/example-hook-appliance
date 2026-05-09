@@ -42,17 +42,12 @@ jobs:
           cd linux
           make -j$(nproc) ARCH=${{ matrix.arch }}
 
-          # Normalise boot output path for packaging
-          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
-            mkdir -p arch/x86_64/boot
-            [[ -f arch/x86/boot/bzImage ]] && cp arch/x86/boot/bzImage arch/x86_64/boot/
-          fi
-
       - name: Package kernel
         run: |
-          tar -czf kernel-${{ matrix.out }}.tar.gz linux/arch/${{ matrix.arch }}/boot
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-${{ matrix.out }}
-          path: kernel-${{ matrix.out }}.tar.gz
+          mkdir -p package/boot
+          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
+            cp linux/arch/x86/boot/bzImage package/boot/
+          else
+            cp linux/arch/arm64/boot/Image.gz package/boot/
+          fi
+          tar -czf kernel-${{ matrix.out }}.tar.gz package
