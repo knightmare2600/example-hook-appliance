@@ -29,33 +29,27 @@ jobs:
 
       - name: Clone Hook
         run: |
-          git clone --depth=1 \
-            --branch ${HOOK_VERSION} \
-            https://github.com/tinkerbell/hook.git
+          git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
 
       #
-      # FIX THE BROKEN DOCKERFILE
+      # FIX: hook's kernel Dockerfile is missing 'make'
+      # so patch it before build.sh runs.
       #
       - name: Patch kernel Dockerfile
         run: |
           cd hook
 
-          sed -i '/apt install -y/a\    make \\' kernel/Dockerfile
-          sed -i '/apt install -y/a\    build-essential \\' kernel/Dockerfile
-          sed -i '/apt install -y/a\    g++ \\' kernel/Dockerfile
-          sed -i '/apt install -y/a\    libssl-dev \\' kernel/Dockerfile
-          sed -i '/apt install -y/a\    pkg-config \\' kernel/Dockerfile
-          sed -i '/apt install -y/a\    dwarves \\' kernel/Dockerfile
+          sed -i '/apt.*install/ s/$/ make/' osie/kernel/Dockerfile
 
-          echo "==== Patched kernel/Dockerfile ===="
-          cat kernel/Dockerfile
+          echo "===== Patched Dockerfile ====="
+          cat osie/kernel/Dockerfile
 
       - name: Build kernel
         run: |
           cd hook
           ./build.sh kernel ${{ matrix.arch }}
 
-      - name: List generated kernel images
+      - name: List built kernel images
         run: |
           docker images | grep hook-kernel || true
 
@@ -63,12 +57,15 @@ jobs:
         run: |
           mkdir -p /tmp/hook-kernel-cache
 
-          docker save \
-            $(docker images --format "{{.Repository}}:{{.Tag}}" | grep hook-kernel | head -n1) \
+          IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "hook-kernel" | head -n1)
+
+          echo "Saving ${IMAGE_ID}"
+
+          docker save "${IMAGE_ID}" \
             -o /tmp/hook-kernel-cache/${{ matrix.arch }}-kernel.tar
 
       - name: Save kernel cache
         uses: actions/cache/save@v4
         with:
           path: /tmp/hook-kernel-cache
-          key: hook-kernel-${{ matrix.arch }}-${{ github.run_id }}
+          key: hook-kernel-${{ matrix.arch }}-${{ env.HOOK_VERSION }}
