@@ -1,4 +1,4 @@
-name: Kernel Build (Fast Precompiled)
+name: Kernel Build (Clean Artifacts)
 
 on:
   workflow_dispatch:
@@ -14,86 +14,50 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
-            out: amd64
-            cross: ""
-          - arch: arm64
-            out: arm64
-            cross: aarch64-linux-gnu-
+          - name: amd64
+            kernel_arch: x86_64
+            image_path: arch/x86/boot/bzImage
+
+          - name: arm64
+            kernel_arch: arm64
+            image_path: arch/arm64/boot/Image
 
     steps:
-      # -----------------------------{ Ensure workspace structure }-----------------------------
-      - name: Prepare workspace
-        run: mkdir -p linux ~/.ccache
-
-      # -----------------------------{ Build dependencies }-----------------------------
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y make gcc g++ bc bison flex libssl-dev libelf-dev build-essential curl xz-utils git gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ccache
+          sudo apt-get install -y \
+            build-essential bc bison flex \
+            libssl-dev libelf-dev \
+            curl xz-utils git
 
-      # -----------------------------{ Cache kernel source (READ ONLY SAFE) }-----------------------------
-      - name: Cache kernel source
-        uses: actions/cache@v4
-        with:
-          path: linux
-          key: linux-source-${{ env.KERNEL_VERSION }}
-          restore-keys: |
-            linux-source-
-
-      # -----------------------------{ Cache ccache per architecture }-----------------------------
-      - name: Cache compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ matrix.out }}-${{ env.KERNEL_VERSION }}
-          restore-keys: |
-            ccache-${{ matrix.out }}-
-
-      # -----------------------------{ Fetch kernel (only if missing) }-----------------------------
       - name: Fetch kernel
         run: |
-          if [ ! -d linux/.git ] && [ ! -f linux/Makefile ]; then
-            curl -LO https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${KERNEL_VERSION}.tar.xz
-            tar -xf linux-${KERNEL_VERSION}.tar.xz
-            mv linux-${KERNEL_VERSION} linux
-          fi
+          curl -LO https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${KERNEL_VERSION}.tar.xz
+          tar -xf linux-${KERNEL_VERSION}.tar.xz
+          mv linux-${KERNEL_VERSION} linux
 
-      # -----------------------------{ Setup ccache }-----------------------------
-      - name: Setup ccache
-        run: |
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-          echo "CC='ccache gcc'" >> $GITHUB_ENV
-          echo "CXX='ccache g++'" >> $GITHUB_ENV
-
-      # -----------------------------{ Configure kernel }-----------------------------
       - name: Configure kernel
         run: |
           cd linux
+          make defconfig
+          make ARCH=${{ matrix.kernel_arch }} olddefconfig
 
-          if [ -f ../configs/${{ matrix.out }}.config ]; then
-            cp ../configs/${{ matrix.out }}.config .config
-          else
-            make defconfig
-          fi
-
-          make ARCH=${{ matrix.arch }} CROSS_COMPILE=${{ matrix.cross }} olddefconfig
-
-      # -----------------------------{ Build kernel }-----------------------------
       - name: Build kernel
         run: |
           cd linux
-          make -j$(nproc) ARCH=${{ matrix.arch }} CROSS_COMPILE=${{ matrix.cross }}
+          make -j$(nproc) ARCH=${{ matrix.kernel_arch }}
 
-      # -----------------------------{ Package artifact }-----------------------------
-      - name: Package kernel
+      - name: Package kernel artifact
         run: |
           mkdir -p out
-          tar -czf out/kernel-${{ matrix.out }}.tar.gz linux/arch/${{ matrix.arch }}/boot
 
-      # -----------------------------{ Upload artifact }-----------------------------
+          tar -czf out/kernel-${{ matrix.name }}.tar.gz \
+            -C linux \
+            ${{ matrix.image_path }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.out }}
-          path: out/kernel-${{ matrix.out }}.tar.gz
+          name: kernel-${{ matrix.name }}
+          path: out/kernel-${{ matrix.name }}.tar.gz
