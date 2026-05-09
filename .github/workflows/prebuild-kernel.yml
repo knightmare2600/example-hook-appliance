@@ -23,42 +23,60 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
+
       - name: Clone Hook
         run: |
           git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
+
       - name: Verify repo
         run: |
           ls -lah hook
 
-      ## 🔧 REAL FIX: ensure kernel build stage has make
-      ## Hook uses Debian base images → fix via apt hook injection
+      #
+      # 🔧 REAL FIX: ensure kernel build stage has make
+      # Hook uses Debian base images → fix via apt hook injection
+      #
       - name: Inject kernel build dependencies
         run: |
           cd hook
-          ## Find kernel Dockerfile dynamically (no hardcoding)
+
+          # Find kernel Dockerfile dynamically (no hardcoding)
           KERNEL_DOCKERFILE=$(grep -RIl "olddefconfig" . | grep Dockerfile | head -n1)
+
           echo "Kernel Dockerfile: ${KERNEL_DOCKERFILE}"
-          ## Ensure make is installed in SAME stage that runs build
+
+          # Ensure make is installed in SAME stage that runs build
           sed -i '/apt-get install/ s/$/ make bc flex bison/' "${KERNEL_DOCKERFILE}"
+
           echo "===== PATCHED DOCKERFILE ====="
           cat "${KERNEL_DOCKERFILE}"
+
       - name: Build kernel
         run: |
           cd hook
           ./build.sh kernel ${{ matrix.arch }}
+
       - name: Verify build output
         run: |
           docker images | grep hook-kernel || true
+
       - name: Export kernel image
         run: |
           mkdir -p /tmp/hook-kernel-cache
+
           IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep hook-kernel | head -n1)
+
           echo "Exporting: ${IMAGE_ID}"
-          docker save "${IMAGE_ID}" -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}.tar
+
+          docker save "${IMAGE_ID}" \
+            -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}.tar
+
       - name: Save cache
         uses: actions/cache/save@v4
         with:
