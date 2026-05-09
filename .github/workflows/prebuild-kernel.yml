@@ -65,3 +65,14 @@ jobs:
         with:
           name: kernel-${{ matrix.out }}
           path: kernel-${{ matrix.out }}.tar.gz
+
+      - name: Create GitHub Release (auto)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kernel-${{ env.KERNEL_VERSION }}
+          name: Kernel ${{ env.KERNEL_VERSION }}
+          files: |
+            kernel-amd64.tar.gz
+            kernel-arm64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
