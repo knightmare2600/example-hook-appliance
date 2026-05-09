@@ -1,53 +1,108 @@
-name: Hook Build (Using Prebuilt Kernel)
+name: Build Initramfs (Provisioning Runtime)
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Kernel Build (Precompiled)"]
+    types:
+      - completed
 
 env:
   KERNEL_VERSION: 5.10.255
 
+permissions:
+  contents: write
+
 jobs:
-  hook:
+  initramfs:
     runs-on: ubuntu-24.04
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: hook-default-amd64
-            kernel: amd64
-          - arch: hook-default-arm64
-            kernel: arm64
-
     steps:
-      - name: Checkout repo (WITH submodules)
+      - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Install initramfs tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            busybox-static \
+            cpio \
+            gzip \
+            ipmitool \
+            pciutils \
+            util-linux \
+            python3
+
+      - name: Create rootfs structure
+        run: |
+          mkdir -p initrd/rootfs/{bin,sbin,etc,proc,sys,usr/bin,usr/sbin,dev,root,collector,overlay}
+
+      - name: Install busybox
+        run: |
+          cp /bin/busybox initrd/rootfs/bin/
+          chmod +x initrd/rootfs/bin/busybox
+
+      - name: Add init (PID 1)
+        run: |
+          cat > initrd/rootfs/init << 'EOF'
+#!/bin/sh
+
+mount -t proc none /proc
+mount -t sysfs none /sys
+
+echo "[initrd] boot started"
+
+ip link set lo up
+
+# Bring up networking (best effort DHCP)
+ip link set eth0 up 2>/dev/null || true
+udhcpc -i eth0 2>/dev/null || true
+
+# Run overlay scripts
+if [ -f /overlay/inventory.sh ]; then
+  echo "[initrd] running overlay"
+  /overlay/inventory.sh
+fi
+
+# Run collector (primary logic)
+if [ -f /collector/collector.py ]; then
+  echo "[initrd] running collector"
+  python3 /collector/collector.py
+fi
+
+echo "[initrd] inventory complete"
+
+# Optionally report shutdown instead of poweroff
+poweroff -f
+EOF
+
+          chmod +x initrd/rootfs/init
+
+      - name: Copy collector and overlay
+        run: |
+          cp -r collector initrd/rootfs/ || true
+          cp -r overlay initrd/rootfs/ || true
+
+      - name: Ensure networking tools exist
+        run: |
+          cp /sbin/ip initrd/rootfs/bin/ || true
+          cp /sbin/udhcpc initrd/rootfs/bin/ || true
+
+      - name: Build initramfs
+        run: |
+          cd initrd/rootfs
+          find . | cpio -H newc -o | gzip > ../initramfs.cpio.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          submodules: recursive
+          name: initramfs
+          path: initrd/initramfs.cpio.gz
 
-      - name: Verify Hook exists
-        run: |
-          echo "Repo contents:"
-          ls -R
-          if [ ! -f ./build.sh ]; then
-            echo "ERROR: build.sh not found in repo root"
-            exit 1
-          fi
-
-      - name: Download prebuilt kernel from release
-        run: |
-          curl -L -o kernel-${{ matrix.kernel }}.tar.gz https://github.com/knightmare2600/example-hook-appliance/releases/download/kernel-${KERNEL_VERSION}/kernel-${{ matrix.kernel }}.tar.gz
-
-      - name: Extract kernel into Hook cache
-        run: |
-          mkdir -p hook/cache/kernel
-          tar -xzf kernel-${{ matrix.kernel }}.tar.gz -C hook/cache/kernel
-
-      - name: Build Hook (NO kernel build happens now)
-        run: |
-          export HOOK_KERNEL_PREBUILT=1
-          export KERNEL_PATH=hook/cache/kernel
-          ./build.sh image ${{ matrix.arch }}
-
-      - name: Show result images
-        run: docker images
+      - name: Publish initramfs to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kernel-${{ env.KERNEL_VERSION }}
+          files: initrd/initramfs.cpio.gz
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
