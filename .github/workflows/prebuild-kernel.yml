@@ -5,6 +5,7 @@ on:
 
 env:
   HOOK_VERSION: v0.11.1
+  DO_PUSH: no
 
 jobs:
   kernel:
@@ -13,59 +14,46 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - hook-default-amd64
-          - hook-default-arm64
+        include:
+          - arch: hook-default-amd64
+            kernel_arch: amd64
+          - arch: hook-default-arm64
+            kernel_arch: arm64
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Clone Hook
         run: |
           git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
-
-      #
-      # FIX: hook's kernel Dockerfile is missing 'make'
-      # so patch it before build.sh runs.
-      #
-      - name: Patch kernel Dockerfile
+      - name: Patch missing make dependency
         run: |
           cd hook
-
-          sed -i '/apt.*install/ s/$/ make/' osie/kernel/Dockerfile
-
-          echo "===== Patched Dockerfile ====="
+          sed -i 's/crossbuild-essential-amd64/crossbuild-essential-amd64 make/' osie/kernel/Dockerfile
+          sed -i 's/crossbuild-essential-arm64/crossbuild-essential-arm64 make/' osie/kernel/Dockerfile
+          echo "===== Dockerfile ====="
           cat osie/kernel/Dockerfile
-
       - name: Build kernel
+        env:
+          KERNEL_ARCH: ${{ matrix.kernel_arch }}
         run: |
           cd hook
           ./build.sh kernel ${{ matrix.arch }}
-
-      - name: List built kernel images
+      - name: Show built images
         run: |
-          docker images | grep hook-kernel || true
-
-      - name: Export kernel image
+          docker images
+      - name: Export built kernel image
         run: |
           mkdir -p /tmp/hook-kernel-cache
-
           IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "hook-kernel" | head -n1)
-
-          echo "Saving ${IMAGE_ID}"
-
-          docker save "${IMAGE_ID}" \
-            -o /tmp/hook-kernel-cache/${{ matrix.arch }}-kernel.tar
-
+          echo "Exporting ${IMAGE_ID}"
+          docker save "${IMAGE_ID}" -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}-kernel.tar
       - name: Save kernel cache
         uses: actions/cache/save@v4
         with:
           path: /tmp/hook-kernel-cache
-          key: hook-kernel-${{ matrix.arch }}-${{ env.HOOK_VERSION }}
+          key: hook-kernel-${{ matrix.kernel_arch }}-${{ env.HOOK_VERSION }}
