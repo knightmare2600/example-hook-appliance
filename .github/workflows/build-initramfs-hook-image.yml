@@ -1,4 +1,4 @@
-name: Initramfs Build (Hook Runtime Image)
+name: Build Initramfs (Hook Runtime Image)
 
 on:
   workflow_dispatch:
@@ -21,18 +21,12 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            busybox-static \
-            cpio \
-            gzip \
-            ipmitool \
-            pciutils \
-            util-linux
+          sudo apt-get install -y busybox-static cpio gzip ipmitool pciutils util-linux
 
-      - name: Create rootfs
+      - name: Create rootfs layout
         run: |
           mkdir -p initrd/rootfs/{bin,sbin,etc,proc,sys,usr/bin,usr/sbin,dev,root,collector,overlay}
 
@@ -41,9 +35,10 @@ jobs:
           cp /bin/busybox initrd/rootfs/bin/
           chmod +x initrd/rootfs/bin/busybox
 
-      - name: Add init script
+      - name: Create init script
         run: |
-          cat > initrd/rootfs/init << 'EOF'
+          mkdir -p initrd/rootfs
+          cat << 'EOF' > initrd/rootfs/init
 #!/bin/sh
 
 mount -t proc none /proc
@@ -53,35 +48,42 @@ echo "[hook] initramfs booting"
 
 ip link set lo up
 
-[ -f /overlay/inventory.sh ] && /overlay/inventory.sh
-[ -f /collector/collector.py ] && python3 /collector/collector.py
+# Run overlay logic if present
+if [ -f /overlay/inventory.sh ]; then
+  /overlay/inventory.sh
+fi
 
-echo "[hook] done"
+# Run collector if present
+if [ -f /collector/collector.py ]; then
+  python3 /collector/collector.py
+fi
+
+echo "[hook] inventory complete"
 poweroff -f
 EOF
+
           chmod +x initrd/rootfs/init
 
-      - name: Copy overlays
+      - name: Copy overlay and collector
         run: |
-          cp -r collector initrd/rootfs/
-          cp -r overlay initrd/rootfs/
+          cp -r collector initrd/rootfs/ || true
+          cp -r overlay initrd/rootfs/ || true
 
       - name: Build initramfs
         run: |
           cd initrd/rootfs
           find . | cpio -H newc -o | gzip > ../initramfs.cpio.gz
 
-      - name: Upload artifact
+      - name: Upload initramfs artifact
         uses: actions/upload-artifact@v4
         with:
           name: initramfs
           path: initrd/initramfs.cpio.gz
 
-      - name: Create/Update GitHub Release (attach initramfs)
+      - name: Publish initramfs to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: kernel-${{ env.KERNEL_VERSION }}
-          name: Hook Runtime ${{ env.KERNEL_VERSION }}
           files: initrd/initramfs.cpio.gz
         env:
           GITHUB_TOKEN: ${{ github.token }}
