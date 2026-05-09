@@ -3,6 +3,9 @@ name: Hook Build (Using Prebuilt Kernel)
 on:
   workflow_dispatch:
 
+env:
+  KERNEL_VERSION: 5.10.255
+
 jobs:
   hook:
     runs-on: ubuntu-24.04
@@ -20,14 +23,9 @@ jobs:
       - name: Checkout Hook
         uses: actions/checkout@v4
 
-      # TEMPORARY: hardcoded kernel build run-id
-      # Replace with GitHub Releases / artifact registry later
-      - name: Download prebuilt kernel
-        uses: actions/download-artifact@v4
-        with:
-          name: kernel-${{ matrix.kernel }}
-          run-id: 25605053942
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download prebuilt kernel (from GitHub Release)
+        run: |
+          curl -L -o kernel-${{ matrix.kernel }}.tar.gz https://github.com/knightmare2600/example-hook-appliance/releases/download/kernel-${KERNEL_VERSION}/kernel-${{ matrix.kernel }}.tar.gz
 
       - name: Extract kernel into Hook cache
         run: |
