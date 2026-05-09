@@ -1,25 +1,67 @@
-#!/bin/sh
+#!/bin/bash
 
-mount -t proc none /proc
-mount -t sysfs none /sys
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
 
-echo "[initrd] boot started"
+echo "[runtime] provisioning runtime booted"
 
-ip link set lo up
+hostname provisioner
 
-ip link set eth0 up 2>/dev/null || true
-udhcpc -i eth0 2>/dev/null || true
+# Bring up all NICs
+for i in /sys/class/net/*; do
+    iface=$(basename "$i")
 
-if [ -f /overlay/inventory.sh ]; then
-  echo "[initrd] running overlay"
-  /overlay/inventory.sh
+    if [[ "$iface" == "lo" ]]; then
+        continue
+    fi
+
+    echo "[network] bringing up $iface"
+
+    ip link set "$iface" up || true
+
+    dhclient "$iface" || true
+done
+
+echo
+echo "[runtime] detected interfaces:"
+ip addr
+
+echo
+echo "[runtime] storage inventory:"
+lsblk
+
+echo
+echo "[runtime] PCI devices:"
+lspci || true
+
+echo
+echo "[runtime] DMI inventory:"
+dmidecode || true
+
+echo
+echo "[runtime] RAID inventory:"
+cat /proc/mdstat || true
+
+echo
+echo "[runtime] NVMe inventory:"
+nvme list || true
+
+# Optional custom overlay
+if [[ -f /overlay/inventory.sh ]]; then
+    echo
+    echo "[runtime] running overlay inventory script"
+    bash /overlay/inventory.sh
 fi
 
-if [ -f /collector/collector.py ]; then
-  echo "[initrd] running collector"
-  python3 /collector/collector.py
+# Optional collector
+if [[ -f /collector/collector.py ]]; then
+    echo
+    echo "[runtime] running collector"
+    python3 /collector/collector.py
 fi
 
-echo "[initrd] inventory complete"
+echo
+echo "[runtime] provisioning runtime complete"
 
-poweroff -f
+exec /bin/bash
