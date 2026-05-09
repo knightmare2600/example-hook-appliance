@@ -20,24 +20,55 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
       - name: Clone Hook
         run: |
-          git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
+          git clone --depth=1 \
+            --branch ${HOOK_VERSION} \
+            https://github.com/tinkerbell/hook.git
+
+      #
+      # FIX THE BROKEN DOCKERFILE
+      #
+      - name: Patch kernel Dockerfile
+        run: |
+          cd hook
+
+          sed -i '/apt install -y/a\    make \\' kernel/Dockerfile
+          sed -i '/apt install -y/a\    build-essential \\' kernel/Dockerfile
+          sed -i '/apt install -y/a\    g++ \\' kernel/Dockerfile
+          sed -i '/apt install -y/a\    libssl-dev \\' kernel/Dockerfile
+          sed -i '/apt install -y/a\    pkg-config \\' kernel/Dockerfile
+          sed -i '/apt install -y/a\    dwarves \\' kernel/Dockerfile
+
+          echo "==== Patched kernel/Dockerfile ===="
+          cat kernel/Dockerfile
+
       - name: Build kernel
         run: |
           cd hook
           ./build.sh kernel ${{ matrix.arch }}
+
+      - name: List generated kernel images
+        run: |
+          docker images | grep hook-kernel || true
+
       - name: Export kernel image
         run: |
           mkdir -p /tmp/hook-kernel-cache
-          docker save  quay.io/tinkerbell/hook-kernel:5.10.255-70151c3e > /tmp/hook-kernel-cache/kernel.tar
+
+          docker save \
+            $(docker images --format "{{.Repository}}:{{.Tag}}" | grep hook-kernel | head -n1) \
+            -o /tmp/hook-kernel-cache/${{ matrix.arch }}-kernel.tar
+
       - name: Save kernel cache
         uses: actions/cache/save@v4
         with:
-          path: |
-            /tmp/hook-kernel-cache
-          key: hook-kernel-${{ matrix.arch }}-${{ env.HOOK_VERSION }}
+          path: /tmp/hook-kernel-cache
+          key: hook-kernel-${{ matrix.arch }}-${{ github.run_id }}
