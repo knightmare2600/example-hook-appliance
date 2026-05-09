@@ -24,34 +24,43 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y make gcc g++ bc bison flex libssl-dev libelf-dev build-essential curl xz-utils git gcc-aarch64-linux-gnu
-      - name: Build kernel
-        run: |
-          cd linux
-          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-            make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
-          else
-            make -j$(nproc) ARCH=${{ matrix.arch }}
-          fi
+
       - name: Fetch kernel
         run: |
           curl -LO https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${KERNEL_VERSION}.tar.xz
           tar -xf linux-${KERNEL_VERSION}.tar.xz
           mv linux-${KERNEL_VERSION} linux
+
       - name: Configure kernel
         run: |
           cd linux
           cp ../configs/${{ matrix.out }}.config .config || make defconfig
           make ARCH=${{ matrix.arch }} olddefconfig
+
       - name: Build kernel
         run: |
           cd linux
-          make -j$(nproc) ARCH=${{ matrix.arch }}
+
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          else
+            make -j$(nproc) ARCH=${{ matrix.arch }}
+          fi
+
       - name: Package kernel
         run: |
           mkdir -p package/boot
+
           if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
             cp linux/arch/x86/boot/bzImage package/boot/
           else
             cp linux/arch/arm64/boot/Image.gz package/boot/
           fi
+
           tar -czf kernel-${{ matrix.out }}.tar.gz package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.out }}
+          path: kernel-${{ matrix.out }}.tar.gz
