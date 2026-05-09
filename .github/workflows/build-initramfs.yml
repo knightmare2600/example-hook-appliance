@@ -38,7 +38,7 @@ jobs:
         run: |
           sudo debootstrap \
             --arch=amd64 \
-            --variant=minbase \
+            --variant=minbase --include=iproute2,isc-dhcp-client,python3,procps,bash,coreutils,util-linux \
             jammy \
             stage/amd64
 
