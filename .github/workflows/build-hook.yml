@@ -1,53 +1,41 @@
-name: Build Hook Appliance (Optimised)
+name: Hook Build (Using Prebuilt Kernel)
 
 on:
   workflow_dispatch:
-  push:
 
 jobs:
-  build:
+  hook:
     runs-on: ubuntu-24.04
 
-    env:
-      HOOK_VERSION: v0.11.1
-      DO_PUSH: "no"
-      KERNEL_ARCH: amd64
-      KERNEL_VERSION: "5.10.255"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: hook-default-amd64
+            kernel: amd64
+          - arch: hook-default-arm64
+            kernel: arm64
 
     steps:
-      - name: Checkout
+      - name: Checkout Hook
         uses: actions/checkout@v4
 
-      # 🔥 Docker layer caching (BIG speedup)
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      - name: Download prebuilt kernel
+        uses: actions/download-artifact@v4
         with:
-          path: /tmp/.buildx-cache
-          key: hook-build-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            hook-build-${{ runner.os }}-
+          name: kernel-${{ matrix.kernel }}
 
-      # 🔥 Pre-pull kernel so Hook doesn't waste time resolving tags
-      - name: Pre-pull kernel image (avoid missing manifests)
+      - name: Extract kernel into Hook cache
         run: |
-          docker pull quay.io/tinkerbell/hook-kernel:5.10.255-70151c3e || true
+          mkdir -p hook/cache/kernel
+          tar -xzf kernel-${{ matrix.kernel }}.tar.gz -C hook/cache/kernel
 
-      # 🔥 Build kernel explicitly (fix missing make + deterministic)
-      - name: Build kernel first (fix missing make issue)
-        run: |
-          cd hook || true
-          ./build.sh kernel hook-default-amd64
-
-      # 🔥 Build full image
-      - name: Build Hook appliance
+      - name: Build Hook (NO kernel build happens now)
         run: |
           cd hook
-          ./build.sh build hook-default-amd64
+          export HOOK_KERNEL_PREBUILT=1
+          export KERNEL_PATH=cache/kernel
+          ./build.sh image ${{ matrix.arch }}
 
-      # 🔥 Show outputs safely (fix your missing path issue)
-      - name: List outputs
-        run: |
-          find hook/out -type d -maxdepth 4 || true
+      - name: Show result images
+        run: docker images
