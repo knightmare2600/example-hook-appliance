@@ -50,16 +50,14 @@ jobs:
 
       - name: Package kernel
         run: |
-          mkdir -p package/boot
-
+          mkdir -p dist
           if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
-            cp linux/arch/x86/boot/bzImage package/boot/
+            cp linux/arch/x86/boot/bzImage dist/kernel-amd64
           else
-            cp linux/arch/arm64/boot/Image.gz package/boot/
+            cp linux/arch/arm64/boot/Image.gz dist/kernel-arm64
           fi
-
-          tar -czf kernel-${{ matrix.out }}.tar.gz package
-
+          tar -czf kernel-${{ matrix.kernel }}.tar.gz -C dist .
+          
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
