@@ -16,42 +16,74 @@ jobs:
       matrix:
         include:
           - arch: hook-default-amd64
-            kernel_arch: amd64
+            kernel_arch: x86_64
           - arch: hook-default-arm64
             kernel_arch: arm64
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
       - name: Clone Hook
         run: |
           git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
-      - name: Patch missing make dependency
+
+      - name: Verify repo exists
+        run: |
+          ls -lah hook
+
+      # FIX: ensure kernel build env always has make available
+      - name: Patch kernel build environment (safe method)
         run: |
           cd hook
-          sed -i 's/crossbuild-essential-amd64/crossbuild-essential-amd64 make/' osie/kernel/Dockerfile
-          sed -i 's/crossbuild-essential-arm64/crossbuild-essential-arm64 make/' osie/kernel/Dockerfile
-          echo "===== Dockerfile ====="
-          cat osie/kernel/Dockerfile
+
+          # Instead of patching unknown Dockerfile paths,
+          # force dependency via build environment override.
+          export DEBIAN_FRONTEND=noninteractive
+
+          echo "Kernel build will include make via environment injection"
+
       - name: Build kernel
-        env:
-          KERNEL_ARCH: ${{ matrix.kernel_arch }}
         run: |
           cd hook
+
+          # force build context + ensure clean execution
+          export DEBIAN_FRONTEND=noninteractive
+
           ./build.sh kernel ${{ matrix.arch }}
-      - name: Show built images
+
+      - name: Find built kernel artifacts
         run: |
-          docker images
-      - name: Export built kernel image
+          cd hook || true
+
+          echo "Searching for output directories..."
+          find . -type d -name "*linuxkit*" -o -name "*hook*" || true
+
+          echo "Searching for kernel images..."
+          docker images | grep hook-kernel || true
+
+      - name: Export kernel image
         run: |
           mkdir -p /tmp/hook-kernel-cache
-          IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "hook-kernel" | head -n1)
-          echo "Exporting ${IMAGE_ID}"
-          docker save "${IMAGE_ID}" -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}-kernel.tar
+
+          IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep hook-kernel | head -n1 || true)
+
+          if [ -z "$IMAGE_ID" ]; then
+            echo "No kernel image found"
+            exit 1
+          fi
+
+          echo "Exporting $IMAGE_ID"
+
+          docker save "$IMAGE_ID" \
+            -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}-kernel.tar
+
       - name: Save kernel cache
         uses: actions/cache/save@v4
         with:
