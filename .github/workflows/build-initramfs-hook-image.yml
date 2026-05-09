@@ -42,40 +42,14 @@ jobs:
           cp /bin/busybox initrd/rootfs/bin/
           chmod +x initrd/rootfs/bin/busybox
 
-      - name: Add init (PID 1)
+      - name: Install init script from repo
         run: |
-          cat > initrd/rootfs/init << 'EOF'
-#!/bin/sh
-
-mount -t proc none /proc
-mount -t sysfs none /sys
-
-echo "[initrd] boot started"
-
-ip link set lo up
-
-# Bring up networking (best effort DHCP)
-ip link set eth0 up 2>/dev/null || true
-udhcpc -i eth0 2>/dev/null || true
-
-# Run overlay scripts
-if [ -f /overlay/inventory.sh ]; then
-  echo "[initrd] running overlay"
-  /overlay/inventory.sh
-fi
-
-# Run collector (primary logic)
-if [ -f /collector/collector.py ]; then
-  echo "[initrd] running collector"
-  python3 /collector/collector.py
-fi
-
-echo "[initrd] inventory complete"
-
-# Optionally report shutdown instead of poweroff
-poweroff -f
-EOF
-
+          cp initramfs/init initrd/rootfs/init
+          chmod +x initrd/rootfs/init
+      - name: Install busybox
+        run: |
+          cp /bin/busybox initrd/rootfs/bin/
+          chmod +x initrd/rootfs/bin/busybox
           chmod +x initrd/rootfs/init
 
       - name: Copy collector and overlay
