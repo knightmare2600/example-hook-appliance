@@ -27,6 +27,10 @@ jobs:
 
           sudo apt-get install -y debootstrap cpio gzip xz-utils
 
+      - name: Create staging directories
+        run: |
+          mkdir -p stage
+
       - name: Build minimal Ubuntu rootfs
         run: |
           sudo debootstrap --arch=amd64 --variant=minbase jammy stage/amd64
