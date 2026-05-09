@@ -69,6 +69,11 @@ fi
 echo
 echo "[runtime] provisioning runtime complete"
 
+# Properly set up getty
+setsid agetty -8 tty1 linux &
+setsid agetty -8 tty2 linux &
+setsid agetty -8 tty3 linux &
+
 # SSH setup
 echo "[ssh] generating host keys"
 ssh-keygen -A 2>/dev/null || true
@@ -86,3 +91,4 @@ while true; do
     echo "[runtime] shell exited, respawning..."
     sleep 1
 done
+
