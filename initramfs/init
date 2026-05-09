@@ -1,5 +1,10 @@
 #!/bin/bash
 
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# bind console early (CRITICAL for ssh + ioctl + prompts)
+exec </dev/console >/dev/console 2>&1
+
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
@@ -8,28 +13,28 @@ echo "[runtime] provisioning runtime booted"
 
 hostname provisioner
 
+echo "[runtime] bringing up loopback"
+ip link set lo up || true
+
 # Bring up all NICs
 for i in /sys/class/net/*; do
     iface=$(basename "$i")
 
-    if [[ "$iface" == "lo" ]]; then
-        continue
-    fi
+    [ "$iface" = "lo" ] && continue
 
     echo "[network] bringing up $iface"
 
     ip link set "$iface" up || true
-
     dhclient "$iface" || true
 done
 
 echo
 echo "[runtime] detected interfaces:"
-ip addr
+ip addr || true
 
 echo
 echo "[runtime] storage inventory:"
-lsblk
+lsblk || true
 
 echo
 echo "[runtime] PCI devices:"
@@ -47,30 +52,32 @@ echo
 echo "[runtime] NVMe inventory:"
 nvme list || true
 
-# Optional custom overlay
-if [[ -f /overlay/inventory.sh ]]; then
+# Optional overlay
+if [ -f /overlay/inventory.sh ]; then
     echo
     echo "[runtime] running overlay inventory script"
-    bash /overlay/inventory.sh
+    bash /overlay/inventory.sh || true
 fi
 
 # Optional collector
-if [[ -f /collector/collector.py ]]; then
+if [ -f /collector/collector.py ]; then
     echo
     echo "[runtime] running collector"
-    python3 /collector/collector.py
+    python3 /collector/collector.py || true
 fi
 
 echo
 echo "[runtime] provisioning runtime complete"
 
+# SSH setup
 echo
 echo "[ssh] generating host keys"
-
 ssh-keygen -A || true
 
 mkdir -p /run/sshd
-echo "[ssh] starting ssh daemon"
-/usr/sbin/sshd
 
-exec /bin/bash
+echo "[ssh] starting ssh daemon"
+/usr/sbin/sshd || true
+
+# final shell
+exec setsid cttyhack /bin/bash
