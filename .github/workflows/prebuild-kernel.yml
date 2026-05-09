@@ -1,11 +1,10 @@
-name: Prebuild Hook Kernels
+name: Kernel Build (Precompiled)
 
 on:
   workflow_dispatch:
 
 env:
-  HOOK_VERSION: v0.11.1
-  DO_PUSH: no
+  KERNEL_VERSION: 5.10.255
 
 jobs:
   kernel:
@@ -15,66 +14,43 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: hook-default-amd64
-            kernel_arch: x86_64
-          - arch: hook-default-arm64
-            kernel_arch: arm64
+          - arch: x86_64
+            out: amd64
+          - arch: arm64
+            out: arm64
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies (FIXES your make error)
+      - name: Install build deps (THIS is where make belongs)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            make \
-            gcc \
-            g++ \
-            bc \
-            bison \
-            flex \
-            libssl-dev \
-            libelf-dev \
-            curl \
-            xz-utils \
-            git \
-            build-essential
+            make gcc g++ bc bison flex \
+            libssl-dev libelf-dev build-essential \
+            curl xz-utils git
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Clone Hook
+      - name: Fetch kernel
         run: |
-          git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
+          curl -LO https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${KERNEL_VERSION}.tar.xz
+          tar -xf linux-${KERNEL_VERSION}.tar.xz
+          mv linux-${KERNEL_VERSION} linux
+
+      - name: Configure kernel
+        run: |
+          cd linux
+          cp ../configs/${{ matrix.out }}.config .config || make defconfig
+          make ARCH=${{ matrix.arch }} olddefconfig
 
       - name: Build kernel
         run: |
-          cd hook
-          export KERNEL_ARCH=${{ matrix.kernel_arch }}
+          cd linux
+          make -j$(nproc) ARCH=${{ matrix.arch }}
 
-          echo "Building for ${KERNEL_ARCH}"
-
-          # Ensure correct kernel build path
-          ./build.sh kernel ${{ matrix.arch }}
-
-      - name: Show images
-        run: docker images
-
-      - name: Export kernel image
+      - name: Package kernel
         run: |
-          mkdir -p /tmp/hook-kernel-cache
+          tar -czf kernel-${{ matrix.out }}.tar.gz linux/arch/${{ matrix.arch }}/boot
 
-          IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep hook-kernel | head -n1)
-
-          echo "Exporting: $IMAGE"
-          docker save "$IMAGE" -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}-kernel.tar
-
-      - name: Save cache
-        uses: actions/cache/save@v4
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: /tmp/hook-kernel-cache
-          key: hook-kernel-${{ matrix.kernel_arch }}-${{ env.HOOK_VERSION }}
+          name: kernel-${{ matrix.out }}
+          path: kernel-${{ matrix.out }}.tar.gz
