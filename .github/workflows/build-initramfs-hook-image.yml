@@ -38,7 +38,8 @@ jobs:
       - name: Create init script
         run: |
           mkdir -p initrd/rootfs
-          cat << 'EOF' > initrd/rootfs/init
+
+          cat > initrd/rootfs/init << 'EOF'
 #!/bin/sh
 
 mount -t proc none /proc
@@ -63,7 +64,6 @@ poweroff -f
 EOF
 
           chmod +x initrd/rootfs/init
-
       - name: Copy overlay and collector
         run: |
           cp -r collector initrd/rootfs/ || true
