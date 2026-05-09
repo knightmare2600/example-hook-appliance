@@ -21,70 +21,45 @@ jobs:
             kernel_arch: arm64
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Clone Hook
         run: |
           git clone --depth=1 --branch ${HOOK_VERSION} https://github.com/tinkerbell/hook.git
-
-      - name: Verify repo exists
+      - name: Verify repo
         run: |
           ls -lah hook
 
-      # FIX: ensure kernel build env always has make available
-      - name: Patch kernel build environment (safe method)
+      ## 🔧 REAL FIX: ensure kernel build stage has make
+      ## Hook uses Debian base images → fix via apt hook injection
+      - name: Inject kernel build dependencies
         run: |
           cd hook
-
-          # Instead of patching unknown Dockerfile paths,
-          # force dependency via build environment override.
-          export DEBIAN_FRONTEND=noninteractive
-
-          echo "Kernel build will include make via environment injection"
-
+          ## Find kernel Dockerfile dynamically (no hardcoding)
+          KERNEL_DOCKERFILE=$(grep -RIl "olddefconfig" . | grep Dockerfile | head -n1)
+          echo "Kernel Dockerfile: ${KERNEL_DOCKERFILE}"
+          ## Ensure make is installed in SAME stage that runs build
+          sed -i '/apt-get install/ s/$/ make bc flex bison/' "${KERNEL_DOCKERFILE}"
+          echo "===== PATCHED DOCKERFILE ====="
+          cat "${KERNEL_DOCKERFILE}"
       - name: Build kernel
         run: |
           cd hook
-
-          # force build context + ensure clean execution
-          export DEBIAN_FRONTEND=noninteractive
-
           ./build.sh kernel ${{ matrix.arch }}
-
-      - name: Find built kernel artifacts
+      - name: Verify build output
         run: |
-          cd hook || true
-
-          echo "Searching for output directories..."
-          find . -type d -name "*linuxkit*" -o -name "*hook*" || true
-
-          echo "Searching for kernel images..."
           docker images | grep hook-kernel || true
-
       - name: Export kernel image
         run: |
           mkdir -p /tmp/hook-kernel-cache
-
-          IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep hook-kernel | head -n1 || true)
-
-          if [ -z "$IMAGE_ID" ]; then
-            echo "No kernel image found"
-            exit 1
-          fi
-
-          echo "Exporting $IMAGE_ID"
-
-          docker save "$IMAGE_ID" \
-            -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}-kernel.tar
-
-      - name: Save kernel cache
+          IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep hook-kernel | head -n1)
+          echo "Exporting: ${IMAGE_ID}"
+          docker save "${IMAGE_ID}" -o /tmp/hook-kernel-cache/${{ matrix.kernel_arch }}.tar
+      - name: Save cache
         uses: actions/cache/save@v4
         with:
           path: /tmp/hook-kernel-cache
