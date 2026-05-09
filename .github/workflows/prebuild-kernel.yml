@@ -20,6 +20,9 @@ jobs:
           - arch: arm64
             out: arm64
 
+    permissions:
+      contents: write
+
     steps:
       - name: Install build deps (THIS is where make belongs)
         run: |
@@ -51,6 +54,7 @@ jobs:
       - name: Package kernel
         run: |
           mkdir -p dist
+
           if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
             cp linux/arch/x86/boot/bzImage dist/kernel-amd64
           else
@@ -64,7 +68,7 @@ jobs:
           name: kernel-${{ matrix.out }}
           path: kernel-${{ matrix.out }}.tar.gz
 
-      - name: Create GitHub Release (auto)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: kernel-${{ env.KERNEL_VERSION }}
@@ -73,4 +77,4 @@ jobs:
             kernel-amd64.tar.gz
             kernel-arm64.tar.gz
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
