@@ -4,7 +4,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 set +e
 
-# CRITICAL: do NOT early bind console with exec (can destabilise PID 1)
+# Basic console + mounts
 exec 0</dev/console 1>/dev/console 2>&1
 
 mount -t proc proc /proc
@@ -15,19 +15,16 @@ echo "[runtime] provisioning runtime booted"
 
 hostname provisioner
 
-echo "[runtime] bringing up loopback"
+# Loopback
 ip link set lo up 2>/dev/null || true
 
-# Bring up NICs safely
+# Bring up available NICs
 for i in /sys/class/net/*; do
-    iface=$(basename "$i")
-
-    [ "$iface" = "lo" ] && continue
-
-    echo "[network] bringing up $iface"
-
-    ip link set "$iface" up 2>/dev/null || true
-    dhclient "$iface" 2>/dev/null || true
+  iface=$(basename "$i")
+  [ "$iface" = "lo" ] && continue
+  echo "[network] bringing up $iface"
+  ip link set "$iface" up 2>/dev/null || true
+  dhclient "$iface" 2>/dev/null || true
 done
 
 echo
@@ -54,27 +51,19 @@ echo
 echo "[runtime] NVMe inventory:"
 nvme list 2>/dev/null || true
 
-# Optional overlay
+# Optional overlay hook
 if [ -f /overlay/inventory.sh ]; then
-    echo "[runtime] running overlay inventory script"
-    bash /overlay/inventory.sh || true
+  echo "[runtime] running overlay inventory script"
+  bash /overlay/inventory.sh || true
 fi
 
 # Optional collector
 if [ -f /collector/collector.py ]; then
-    echo "[runtime] running collector"
-    python3 /collector/collector.py || true
+  echo "[runtime] running collector"
+  python3 /collector/collector.py || true
 fi
 
-echo
-echo "[runtime] provisioning runtime complete"
-
-# Properly set up getty
-setsid agetty -8 tty1 linux &
-setsid agetty -8 tty2 linux &
-setsid agetty -8 tty3 linux &
-
-# SSH setup
+# SSH setup (optional but safe)
 echo "[ssh] generating host keys"
 ssh-keygen -A 2>/dev/null || true
 
@@ -83,12 +72,8 @@ mkdir -p /run/sshd
 echo "[ssh] starting ssh daemon"
 /usr/sbin/sshd 2>/dev/null || true
 
-# FINAL SAFETY NET (CRITICAL)
-echo "[runtime] entering persistent shell"
+echo
+echo "[runtime] entering shell"
 
-while true; do
-    setsid cttyhack /bin/bash
-    echo "[runtime] shell exited, respawning..."
-    sleep 1
-done
-
+# FINAL: stable interactive shell (PID 1 must not exit)
+exec /bin/bash
