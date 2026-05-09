@@ -140,10 +140,6 @@ jobs:
         run: |
           sudo mkdir -p stage/amd64/var/run/sshd
 
-      - name: Generate SSH host keys
-        run: |
-          sudo chroot stage/amd64 ssh-keygen -A
-
       - name: Build initramfs archive
         run: |
           cd stage/amd64
