@@ -1,0 +1,10 @@
+export TERM=xterm-256color
+
+alias ll='ls -lah --color=auto'
+alias ipi='ip -br addr'
+alias pci='lspci'
+alias md='cat /proc/mdstat'
+
+echo
+echo "Provisioning Runtime Shell"
+echo
