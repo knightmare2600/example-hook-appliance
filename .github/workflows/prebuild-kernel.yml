@@ -52,11 +52,11 @@ jobs:
       - name: Package kernel
         run: |
           mkdir -p dist
-          if [[ "${{ matrix.kernel }}" == "amd64" ]]; then
+
+          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
             cp linux/arch/x86/boot/bzImage dist/kernel-amd64
           fi
-
-          if [[ "${{ matrix.kernel }}" == "arm64" ]]; then
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
             cp linux/arch/arm64/boot/Image.gz dist/kernel-arm64
           fi
           tar -czf kernel-${{ matrix.kernel }}.tar.gz -C dist .
