@@ -5,7 +5,9 @@ on:
 
 env:
   KERNEL_VERSION: 5.10.255
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
 
 jobs:
   kernel:
@@ -16,15 +18,12 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            out: amd64
+            kernel: amd64
           - arch: arm64
-            out: arm64
-
-    permissions:
-      contents: write
+            kernel: arm64
 
     steps:
-      - name: Install build deps (THIS is where make belongs)
+      - name: Install build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y make gcc g++ bc bison flex libssl-dev libelf-dev build-essential curl xz-utils git gcc-aarch64-linux-gnu
@@ -38,17 +37,16 @@ jobs:
       - name: Configure kernel
         run: |
           cd linux
-          cp ../configs/${{ matrix.out }}.config .config || make defconfig
+          cp ../configs/${{ matrix.kernel }}.config .config || make defconfig
           make ARCH=${{ matrix.arch }} olddefconfig
 
       - name: Build kernel
         run: |
           cd linux
-
-          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+          if [[ "${{ matrix.kernel }}" == "arm64" ]]; then
             make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
           else
-            make -j$(nproc) ARCH=${{ matrix.arch }}
+            make -j$(nproc) ARCH=x86_64
           fi
 
       - name: Package kernel
@@ -56,16 +54,18 @@ jobs:
           mkdir -p dist
           if [[ "${{ matrix.kernel }}" == "amd64" ]]; then
             cp linux/arch/x86/boot/bzImage dist/kernel-amd64
-          else
+          fi
+
+          if [[ "${{ matrix.kernel }}" == "arm64" ]]; then
             cp linux/arch/arm64/boot/Image.gz dist/kernel-arm64
           fi
           tar -czf kernel-${{ matrix.kernel }}.tar.gz -C dist .
-          
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.out }}
-          path: kernel-${{ matrix.out }}.tar.gz
+          name: kernel-${{ matrix.kernel }}
+          path: kernel-${{ matrix.kernel }}.tar.gz
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
