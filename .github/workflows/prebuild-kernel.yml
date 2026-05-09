@@ -54,8 +54,7 @@ jobs:
       - name: Package kernel
         run: |
           mkdir -p dist
-
-          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
+          if [[ "${{ matrix.kernel }}" == "amd64" ]]; then
             cp linux/arch/x86/boot/bzImage dist/kernel-amd64
           else
             cp linux/arch/arm64/boot/Image.gz dist/kernel-arm64
