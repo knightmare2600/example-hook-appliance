@@ -2,13 +2,6 @@ name: Build Provisioning Runtime
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Kernel Build (Precompiled)"]
-    types:
-      - completed
-
-env:
-  KERNEL_VERSION: 5.10.255
 
 permissions:
   contents: write
@@ -17,159 +10,190 @@ jobs:
   initramfs:
     runs-on: ubuntu-24.04
 
+    env:
+      UBUNTU_RELEASE: noble
+      NETBOOT_URL: https://archive.ubuntu.com/ubuntu/dists/noble-updates/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Download kernel bundle
-        run: |
-          curl -L -o kernel-amd64.tar.gz https://github.com/knightmare2600/example-hook-appliance/releases/download/kernel-${KERNEL_VERSION}/kernel-amd64.tar.gz
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap cpio gzip xz-utils
+          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget squashfs-tools rsync
 
-      - name: Create staging directory
+      - name: Download Ubuntu netboot kernel + initrd
         run: |
-          mkdir -p stage/amd64
+          mkdir -p upstream
+          curl -L -o upstream/linux ${NETBOOT_URL}/linux
+          curl -L -o upstream/initrd.gz ${NETBOOT_URL}/initrd.gz
+          chmod +x upstream/linux
 
-      - name: Build minimal Ubuntu rootfs
+      - name: Extract upstream initrd
         run: |
-          sudo debootstrap --arch=amd64 --variant=minbase --include=iproute2,isc-dhcp-client,python3,procps,bash,coreutils,util-linux,kmod jammy stage/amd64
+          mkdir -p initrd-tree
+          cd initrd-tree
+          gzip -dc ../upstream/initrd.gz | sudo cpio -idmv
 
-      - name: Extract kernel modules into rootfs
+      - name: Build provisioning rootfs
         run: |
-          mkdir -p kernel-extract
+          sudo debootstrap --arch=amd64 --variant=minbase --include=bash,coreutils,util-linux,procps,iproute2,isc-dhcp-client,python3 noble rootfs
 
-          sudo tar -xzf kernel-amd64.tar.gz -C kernel-extract
-
-          echo
-          echo "=== KERNEL PACKAGE CONTENTS ==="
-          find kernel-extract | head -50
-
-          if [ -d kernel-extract/lib/modules ]; then
-            sudo mkdir -p stage/amd64/lib
-            sudo cp -a kernel-extract/lib/modules stage/amd64/lib/
-          fi
+      - name: Mount chroot filesystems
+        run: |
+          sudo mount --bind /dev rootfs/dev
+          sudo mount --bind /proc rootfs/proc
+          sudo mount --bind /sys rootfs/sys
 
       - name: Install provisioning packages
         run: |
-          sudo mount --bind /dev stage/amd64/dev
-          sudo mount --bind /proc stage/amd64/proc
-          sudo mount --bind /sys stage/amd64/sys
-          set -e
+          sudo chroot rootfs /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
 
-          echo "=== STAGE 0 ==="
-          echo "deb http://archive.ubuntu.com/ubuntu jammy universe" | sudo tee -a stage/amd64/etc/apt/sources.list
-          echo "deb http://archive.ubuntu.com/ubuntu jammy-updates universe" | sudo tee -a stage/amd64/etc/apt/sources.list
-          echo "deb http://archive.ubuntu.com/ubuntu jammy-security universe" | sudo tee -a stage/amd64/etc/apt/sources.list
+            apt-get update
 
-          echo "=== STAGE 1 ==="
-          sudo chroot stage/amd64 /bin/bash -c "apt-get update && apt-get install -y curl wget jq tmux vim-tiny grc"
+            apt-get install -y bash \
+              busybox-static \
+              iproute2 \
+              net-tools \
+              isc-dhcp-client \
+              ifupdown \
+              iputils-ping \
+              curl \
+              wget \
+              jq \
+              ca-certificates \
+              openssh-server \
+              openssh-client \
+              ssh \
+              tmux \
+              vim-tiny \
+              pciutils \
+              usbutils \
+              dmidecode \
+              lshw \
+              mdadm \
+              smartmontools \
+              nvme-cli \
+              python3 \
+              python3-pip \
+              ethtool \
+              kmod \
+              kbd \
+              console-setup \
+              fbset \
+              acpid \
+              less \
+              file \
+              rsync \
+              tar \
+              gzip \
+              bzip2 \
+              xz-utils
 
-          echo "=== STAGE 2 ==="
-          sudo chroot stage/amd64 /bin/bash -c "apt-get install -y pciutils usbutils dmidecode lshw ethtool"
-
-          echo "=== STAGE 3 ==="
-          sudo chroot stage/amd64 /bin/bash -c "apt-get install -y ipmitool smartmontools nvme-cli mdadm"
-
-          echo "=== STAGE 4 ==="
-          sudo chroot stage/amd64 /bin/bash -c "apt-get install -y openssh-server openssh-client ssh"
-
-          echo "=== STAGE 5 ==="
-          sudo chroot stage/amd64 /bin/bash -c "apt-get install -y kbd console-setup fbset"
-
-          echo "=== STAGE 6 ==="
-          sudo chroot stage/amd64 /bin/bash -c "apt-get install -y acpid"
-
-      - name: Verify installed binaries
-        run: |
-          sudo chroot stage/amd64 /bin/bash -c "
-            echo '=== VERIFY CORE TOOLS ==='
-
-            which ip || true
-            which ifconfig || true
-            which dhclient || true
-            which curl || true
-            which ssh || true
-            which sshd || true
-            which nvme || true
-            which tmux || true
-            which modprobe || true
-            which lspci || true
-            which dmidecode || true
-            which smartctl || true
-            which ipmitool || true
-            which vim || true
-
-            echo
-            echo '=== VERIFY MODULE TREE ==='
-
-            ls -l /lib/modules || true
-
-            echo
-            echo '=== FILE CHECK ==='
-
-            ls -l /usr/sbin/sshd || true
-            ls -l /usr/sbin/dhclient || true
-            ls -l /usr/bin/curl || true
-            ls -l /usr/bin/tmux || true
+            apt-get clean
           "
 
-      - name: Unmount pseudo filesystems
+      - name: Verify installed tools
         run: |
-          sudo umount stage/amd64/dev || true
-          sudo umount stage/amd64/proc || true
-          sudo umount stage/amd64/sys || true
+          sudo chroot rootfs /bin/bash -c "
+            echo '=== TOOL CHECK ==='
+
+            for x in \
+              ip \
+              dhclient \
+              curl \
+              wget \
+              sshd \
+              tmux \
+              vim \
+              lspci \
+              dmidecode \
+              nvme \
+              smartctl \
+              modprobe \
+              lsmod \
+              ethtool \
+              ifconfig
+            do
+              echo
+              echo \"=== \$x ===\"
+              which \$x || true
+            done
+          "
+
+      - name: Unmount chroot filesystems
+        run: |
+          sudo umount rootfs/dev || true
+          sudo umount rootfs/proc || true
+          sudo umount rootfs/sys || true
+
+      - name: Copy runtime into initrd
+        run: |
+          sudo rsync -a rootfs/ initrd-tree/
+
+      - name: Install custom init
+        run: |
+          sudo cp initramfs/init initrd-tree/init
+          sudo chmod +x initrd-tree/init
+
+      - name: Install MOTD and shell config
+        run: |
+          sudo cp initramfs/motd initrd-tree/etc/motd || true
+          sudo cp initramfs/bashrc initrd-tree/root/.bashrc || true
+
+      - name: Copy collector and overlay
+        run: |
+          sudo mkdir -p initrd-tree/collector
+          sudo mkdir -p initrd-tree/overlay
+
+          sudo cp -r collector/* initrd-tree/collector/ || true
+          sudo cp -r overlay/* initrd-tree/overlay/ || true
+
+      - name: Configure root account
+        run: |
+          echo 'root:root' | sudo chroot initrd-tree chpasswd || true
+
+      - name: Enable SSH login
+        run: |
+          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' initrd-tree/etc/ssh/sshd_config || true
+          sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' initrd-tree/etc/ssh/sshd_config || true
+
+      - name: Create required runtime directories
+        run: |
+          sudo mkdir -p initrd-tree/run/sshd
+          sudo mkdir -p initrd-tree/var/run/sshd
+          sudo mkdir -p initrd-tree/root
 
       - name: Create device nodes
         run: |
-          sudo mknod -m 622 stage/amd64/dev/console c 5 1 || true
-          sudo mknod -m 666 stage/amd64/dev/null c 1 3 || true
+          sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
+          sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
+          sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
 
-      - name: Set root password
+      - name: Build final initramfs
         run: |
-          echo 'root:root' | sudo chroot stage/amd64 chpasswd
+          cd initrd-tree
 
-      - name: Install init script
-        run: |
-          sudo cp initramfs/init stage/amd64/init
-          sudo chmod +x stage/amd64/init
+          sudo find . -print0 | \
+            sudo cpio --null -ov --format=newc | \
+            gzip -9 > ../initramfs-amd64.cpio.gz
 
-      - name: Install supporting files
-        run: |
-          sudo cp initramfs/motd stage/amd64/etc/motd || true
-          sudo cp initramfs/bashrc stage/amd64/root/.bashrc || true
-
-      - name: Copy collector + overlay
-        run: |
-          sudo mkdir -p stage/amd64/collector
-          sudo mkdir -p stage/amd64/overlay
-
-          sudo cp -r collector/* stage/amd64/collector/ || true
-          sudo cp -r overlay/* stage/amd64/overlay/ || true
-
-      - name: Enable SSH runtime directory
-        run: |
-          sudo mkdir -p stage/amd64/var/run/sshd
-
-      - name: Build initramfs archive
-        run: |
-          cd stage/amd64
-
-          sudo find . -print0 | sudo cpio --null -ov --format=newc | gzip -1 > ../../initramfs-amd64.cpio.gz
-
-      - name: Upload artifact
+      - name: Upload initramfs artifact
         uses: actions/upload-artifact@v4
         with:
           name: initramfs-amd64
-          path: initramfs-amd64.cpio.gz
+          path: |
+            initramfs-amd64.cpio.gz
+            upstream/linux
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: kernel-${{ env.KERNEL_VERSION }}
-          files: initramfs-amd64.cpio.gz
+          tag_name: provisioning-runtime
+          files: |
+            initramfs-amd64.cpio.gz
+            upstream/linux
         env:
           GITHUB_TOKEN: ${{ github.token }}
