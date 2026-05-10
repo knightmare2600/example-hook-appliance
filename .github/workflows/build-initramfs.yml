@@ -66,7 +66,7 @@ jobs:
           echo "deb http://archive.ubuntu.com/ubuntu jammy-security universe" | sudo tee -a stage/amd64/etc/apt/sources.list
 
           echo "=== STAGE 1 ==="
-          sudo chroot stage/amd64 /bin/bash -c "apt-get update && apt-get install -y curl wget jq tmux vim-tiny"
+          sudo chroot stage/amd64 /bin/bash -c "apt-get update && apt-get install -y curl wget jq tmux vim-tiny grc"
 
           echo "=== STAGE 2 ==="
           sudo chroot stage/amd64 /bin/bash -c "apt-get install -y pciutils usbutils dmidecode lshw ethtool"
