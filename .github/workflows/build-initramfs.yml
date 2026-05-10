@@ -58,8 +58,12 @@ jobs:
           sudo mount --bind /dev stage/amd64/dev
           sudo mount --bind /proc stage/amd64/proc
           sudo mount --bind /sys stage/amd64/sys
-
           set -e
+
+          echo "=== STAGE 0 ==="
+          echo "deb http://archive.ubuntu.com/ubuntu jammy universe" | sudo tee -a stage/amd64/etc/apt/sources.list
+          echo "deb http://archive.ubuntu.com/ubuntu jammy-updates universe" | sudo tee -a stage/amd64/etc/apt/sources.list
+          echo "deb http://archive.ubuntu.com/ubuntu jammy-security universe" | sudo tee -a stage/amd64/etc/apt/sources.list
 
           echo "=== STAGE 1 ==="
           sudo chroot stage/amd64 /bin/bash -c "apt-get update && apt-get install -y curl wget jq tmux vim-tiny"
