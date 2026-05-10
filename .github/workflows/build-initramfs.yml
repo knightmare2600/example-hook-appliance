@@ -73,22 +73,22 @@ jobs:
 
           set -e
           echo "=== STAGE 1 ==="
-          apt-get install -y curl wget jq tmux vim-tiny grc
+          sudo apt-get install -y curl wget jq tmux vim-tiny grc
 
           echo "=== STAGE 2 ==="
-          apt-get install -y pciutils usbutils dmidecode lshw ethtool
+          sudo apt-get install -y pciutils usbutils dmidecode lshw ethtool
 
           echo "=== STAGE 3 ==="
-          apt-get install -y ipmitool smartmontools nvme-cli mdadm
+          sudo apt-get install -y ipmitool smartmontools nvme-cli mdadm
 
           echo "=== STAGE 4 ==="
-          apt-get install -y openssh-server
+          sudo apt-get install -y openssh-server
 
           echo "=== STAGE 5 ==="
-          apt-get install -y kbd console-setup fbset
+          sudo apt-get install -y kbd console-setup fbset
 
           echo "=== STAGE 6 ==="
-          apt-get install -y acpid
+          sudo apt-get install -y acpid
 
       - name: Verify installed binaries
         run: |
