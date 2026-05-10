@@ -107,7 +107,11 @@ jobs:
               kbd \
               console-setup \
               fbset \
-              acpid
+              acpid \
+              minicom \ 
+              lrzsz \
+              linux-firmware \
+              linux-firmware-nonfree
 
             apt-get clean
           "
