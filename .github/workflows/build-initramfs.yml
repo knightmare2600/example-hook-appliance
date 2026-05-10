@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      UBUNTU_RELEASE: noble
-      NETBOOT_URL: https://archive.ubuntu.com/ubuntu/dists/noble-updates/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64
+      DEBIAN_RELEASE: trixie
+      NETBOOT_URL: https://deb.debian.org/debian/dists/trixie/main/installer-amd64/current/images/netboot/debian-installer/amd64
 
     steps:
       - name: Checkout repo
@@ -21,24 +21,35 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget squashfs-tools rsync
+          sudo apt-get install -y debootstrap cpio gzip xz-utils zstd curl wget rsync file
 
-      - name: Download Ubuntu netboot kernel + initrd
+      - name: Download Debian netboot kernel + initrd
         run: |
           mkdir -p upstream
           curl -L -o upstream/linux ${NETBOOT_URL}/linux
-          curl -L -o upstream/initrd.gz ${NETBOOT_URL}/initrd.gz
+          curl -L -o upstream/initrd.img ${NETBOOT_URL}/initrd.gz
           chmod +x upstream/linux
 
       - name: Extract upstream initrd
         run: |
           mkdir -p initrd-tree
           cd initrd-tree
-          gzip -dc ../upstream/initrd.gz | sudo cpio -idmv
+          FILETYPE=$(file ../upstream/initrd.img)
+          echo "$FILETYPE"
+          if echo "$FILETYPE" | grep -qi gzip; then
+            gzip -dc ../upstream/initrd.img | sudo cpio -idmv
+          elif echo "$FILETYPE" | grep -qi xz; then
+            xz -dc ../upstream/initrd.img | sudo cpio -idmv
+          elif echo "$FILETYPE" | grep -qi zstandard; then
+            zstd -dc ../upstream/initrd.img | sudo cpio -idmv
+          else
+            echo "Unknown initrd compression"
+            exit 1
+          fi
 
       - name: Build provisioning rootfs
         run: |
-          sudo debootstrap --arch=amd64 --variant=minbase --include=bash,coreutils,util-linux,procps,iproute2,isc-dhcp-client,python3 noble rootfs
+          sudo debootstrap --arch=amd64 --variant=minbase --include=bash,coreutils,util-linux,procps,iproute2,isc-dhcp-client,python3 trixie rootfs http://deb.debian.org/debian
 
       - name: Mount chroot filesystems
         run: |
@@ -50,10 +61,9 @@ jobs:
         run: |
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
-
             apt-get update
-
-            apt-get install -y bash \
+            apt-get install -y \
+              bash \
               busybox-static \
               iproute2 \
               net-tools \
@@ -90,11 +100,17 @@ jobs:
               tar \
               gzip \
               bzip2 \
-              xz-utils
-
+              xz-utils \
+              firmware-linux \
+              firmware-linux-free \
+              firmware-misc-nonfree \
+              firmware-realtek \
+              firmware-iwlwifi \
+              firmware-amd-graphics \
+              firmware-intel-graphics
             apt-get clean
           "
-
+          
       - name: Verify installed tools
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -147,7 +163,6 @@ jobs:
         run: |
           sudo mkdir -p initrd-tree/collector
           sudo mkdir -p initrd-tree/overlay
-
           sudo cp -r collector/* initrd-tree/collector/ || true
           sudo cp -r overlay/* initrd-tree/overlay/ || true
 
@@ -160,7 +175,7 @@ jobs:
           sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' initrd-tree/etc/ssh/sshd_config || true
           sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' initrd-tree/etc/ssh/sshd_config || true
 
-      - name: Create required runtime directories
+      - name: Create runtime directories
         run: |
           sudo mkdir -p initrd-tree/run/sshd
           sudo mkdir -p initrd-tree/var/run/sshd
@@ -175,7 +190,6 @@ jobs:
       - name: Build final initramfs
         run: |
           cd initrd-tree
-
           sudo find . -print0 | \
             sudo cpio --null -ov --format=newc | \
             gzip -9 > ../initramfs-amd64.cpio.gz
