@@ -21,9 +21,15 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Download kernel bundle
+        run: |
+          curl -L -o kernel-amd64.tar.gz \
+            https://github.com/knightmare2600/example-hook-appliance/releases/download/kernel-${KERNEL_VERSION}/kernel-amd64.tar.gz
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             debootstrap \
             cpio \
@@ -38,11 +44,16 @@ jobs:
         run: |
           sudo debootstrap \
             --arch=amd64 \
-            --variant=minbase --include=iproute2,isc-dhcp-client,python3,procps,bash,coreutils,util-linux \
+            --variant=minbase \
+            --include=iproute2,isc-dhcp-client,python3,procps,bash,coreutils,util-linux \
             jammy \
             stage/amd64
 
-      - name: Mount pseudo filesystems (CRITICAL)
+      - name: Extract kernel + modules into rootfs
+        run: |
+          sudo tar -xzf kernel-amd64.tar.gz -C stage/amd64
+
+      - name: Mount pseudo filesystems
         run: |
           sudo mount --bind /dev stage/amd64/dev
           sudo mount --bind /proc stage/amd64/proc
@@ -82,24 +93,37 @@ jobs:
               python3-pip \
               kbd \
               console-setup \
-              fbset util-linux login
+              fbset \
+              util-linux \
+              login \
+              kmod \
+              acpid \
+              ethtool
 
             apt-get clean
           "
 
-      - name: Verify installed binaries (IMPORTANT DEBUG STEP)
+      - name: Verify installed binaries
         run: |
           sudo chroot stage/amd64 /bin/bash -c "
             echo '=== VERIFY CORE TOOLS ==='
+
             which ip || true
             which ifconfig || true
             which dhclient || true
             which sshd || true
             which nvme || true
             which tmux || true
+            which modprobe || true
+
+            echo
+            echo '=== VERIFY MODULE TREE ==='
+
+            ls -l /lib/modules || true
 
             echo
             echo '=== FILE CHECK ==='
+
             ls -l /usr/sbin/sshd || true
             ls -l /usr/sbin/dhclient || true
           "
@@ -137,13 +161,10 @@ jobs:
         run: |
           sudo mkdir -p stage/amd64/var/run/sshd
 
-      - name: Enable SSH host keys (build-time safe)
-        run: |
-          sudo chroot stage/amd64 ssh-keygen -A || true
-
       - name: Build initramfs archive
         run: |
           cd stage/amd64
+
           sudo find . -print0 | \
             sudo cpio --null -ov --format=newc | \
             gzip -9 > ../../initramfs-amd64.cpio.gz
