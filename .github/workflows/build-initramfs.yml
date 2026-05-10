@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      DEBIAN_RELEASE: trixie
+      DEBIAN_RELEASE: bookworm
       DEBIAN_MIRROR: http://deb.debian.org/debian
 
     steps:
@@ -23,12 +23,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync
 
-      - name: Create root filesystem
+      - name: Create working directories
+        run: |
+          mkdir -p rootfs
+          mkdir -p initrd-tree
+
+      - name: Build Debian rootfs
         run: |
           sudo debootstrap \
             --arch=amd64 \
             --variant=minbase \
-            --include=systemd,systemd-sysv,udev,kmod \
             ${DEBIAN_RELEASE} \
             rootfs \
             ${DEBIAN_MIRROR}
@@ -38,8 +42,17 @@ jobs:
           sudo mount --bind /dev rootfs/dev
           sudo mount --bind /proc rootfs/proc
           sudo mount --bind /sys rootfs/sys
+          sudo mount --bind /dev/pts rootfs/dev/pts
 
-      - name: Install runtime packages
+      - name: Configure apt sources
+        run: |
+          cat << EOF | sudo tee rootfs/etc/apt/sources.list
+          deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+          EOF
+
+      - name: Install provisioning packages
         run: |
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
@@ -47,23 +60,18 @@ jobs:
             apt-get update
 
             apt-get install -y \
-              bash \
-              busybox-static \
               systemd \
               systemd-sysv \
-              udev \
               dbus \
+              dbus-broker \
+              libpam-systemd \
+              udev \
               kmod \
               util-linux \
-              procps \
-              coreutils \
-              less \
-              file \
-              tar \
-              gzip \
-              bzip2 \
-              xz-utils \
-              rsync \
+              login \
+              passwd \
+              bash \
+              busybox-static \
               iproute2 \
               net-tools \
               isc-dhcp-client \
@@ -79,114 +87,76 @@ jobs:
               ssh \
               tmux \
               vim-tiny \
+              less \
+              file \
+              rsync \
+              tar \
+              gzip \
+              bzip2 \
+              xz-utils \
               pciutils \
               usbutils \
               dmidecode \
               lshw \
-              mdadm \
               smartmontools \
               nvme-cli \
+              mdadm \
+              ipmitool \
               python3 \
               python3-pip \
               kbd \
               console-setup \
               fbset \
-              acpid \
-              login \
-              passwd \
-              sudo \
-              tzdata \
-              locales
-
-            systemctl enable ssh
-            systemctl enable systemd-networkd
-            systemctl enable systemd-resolved
-            systemctl enable serial-getty@ttyS0.service
+              acpid
 
             apt-get clean
           "
 
       - name: Configure networking
         run: |
-          sudo mkdir -p rootfs/etc/systemd/network
+          cat << EOF | sudo tee rootfs/etc/network/interfaces
+          auto lo
+          iface lo inet loopback
 
-          cat << 'EOF' | sudo tee rootfs/etc/systemd/network/20-wired.network
-          [Match]
-          Name=en* eth*
-
-          [Network]
-          DHCP=yes
+          allow-hotplug eth0
+          iface eth0 inet dhcp
           EOF
 
       - name: Configure root account
         run: |
           echo 'root:root' | sudo chroot rootfs chpasswd
 
-      - name: Configure SSH
+      - name: Enable SSH root login
         run: |
           sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' rootfs/etc/ssh/sshd_config
           sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' rootfs/etc/ssh/sshd_config
 
+      - name: Enable systemd services
+        run: |
+          sudo chroot rootfs systemctl enable ssh
+          sudo chroot rootfs systemctl enable serial-getty@ttyS0.service
+          sudo chroot rootfs systemctl enable getty@tty1.service
+          sudo chroot rootfs systemctl enable systemd-networkd
+          sudo chroot rootfs systemctl set-default multi-user.target
+
       - name: Install provisioning service
         run: |
-          sudo mkdir -p rootfs/etc/systemd/system
-
           cat << 'EOF' | sudo tee rootfs/etc/systemd/system/provisioning.service
           [Unit]
-          Description=Provisioning Runtime Task
+          Description=Provisioning Runtime
           After=network-online.target ssh.service
           Wants=network-online.target
 
           [Service]
           Type=simple
-          ExecStart=/usr/local/bin/provisioning-task.sh
+          ExecStart=/collector/start.sh
           Restart=on-failure
 
           [Install]
           WantedBy=multi-user.target
           EOF
 
-          sudo mkdir -p rootfs/usr/local/bin
-
-          cat << 'EOF' | sudo tee rootfs/usr/local/bin/provisioning-task.sh
-          #!/bin/bash
-
-          echo "Provisioning runtime started"
-          ip addr
-          EOF
-
-          sudo chmod +x rootfs/usr/local/bin/provisioning-task.sh
-
           sudo chroot rootfs systemctl enable provisioning.service
-
-      - name: Install MOTD and shell config
-        run: |
-          sudo cp initramfs/motd rootfs/etc/motd || true
-          sudo cp initramfs/bashrc rootfs/root/.bashrc || true
-
-      - name: Copy collector and overlay
-        run: |
-          sudo mkdir -p rootfs/collector
-          sudo mkdir -p rootfs/overlay
-
-          sudo cp -r collector/* rootfs/collector/ || true
-          sudo cp -r overlay/* rootfs/overlay/ || true
-
-      - name: Create runtime directories
-        run: |
-          sudo mkdir -p rootfs/run
-          sudo mkdir -p rootfs/run/sshd
-          sudo mkdir -p rootfs/var/run
-          sudo mkdir -p rootfs/var/run/sshd
-          sudo mkdir -p rootfs/root
-          sudo mkdir -p rootfs/tmp
-
-      - name: Create device nodes
-        run: |
-          sudo mknod -m 622 rootfs/dev/console c 5 1 || true
-          sudo mknod -m 666 rootfs/dev/null c 1 3 || true
-          sudo mknod -m 666 rootfs/dev/tty c 5 0 || true
-          sudo mknod -m 666 rootfs/dev/ttyS0 c 4 64 || true
 
       - name: Verify installed tools
         run: |
@@ -208,9 +178,7 @@ jobs:
               modprobe \
               lsmod \
               ethtool \
-              ifconfig \
-              login \
-              systemctl
+              ifconfig
             do
               echo
               echo \"=== \$x ===\"
@@ -218,20 +186,70 @@ jobs:
             done
 
             echo
-            echo '=== SYSTEMD DEFAULT TARGET ==='
-            systemctl get-default || true
+            echo '=== SYSTEMD ==='
+            ls -l /lib/systemd/systemd || true
           "
+
+      - name: Copy rootfs into initrd tree
+        run: |
+          sudo rsync -aHAX rootfs/ initrd-tree/
+
+      - name: Install bootstrap init
+        run: |
+          cat << 'EOF' | sudo tee initrd-tree/init
+          #!/bin/sh
+
+          mount -t devtmpfs devtmpfs /dev
+          mount -t proc proc /proc
+          mount -t sysfs sysfs /sys
+          mount -t tmpfs tmpfs /run
+
+          mkdir -p /run/lock
+          mkdir -p /var/run
+
+          exec /lib/systemd/systemd
+          EOF
+
+          sudo chmod +x initrd-tree/init
+
+      - name: Install MOTD and shell config
+        run: |
+          sudo cp initramfs/motd initrd-tree/etc/motd || true
+          sudo cp initramfs/bashrc initrd-tree/root/.bashrc || true
+
+      - name: Copy collector and overlay
+        run: |
+          sudo mkdir -p initrd-tree/collector
+          sudo mkdir -p initrd-tree/overlay
+
+          sudo cp -r collector/* initrd-tree/collector/ || true
+          sudo cp -r overlay/* initrd-tree/overlay/ || true
+
+      - name: Create required runtime directories
+        run: |
+          sudo mkdir -p initrd-tree/run
+          sudo mkdir -p initrd-tree/run/sshd
+          sudo mkdir -p initrd-tree/var/run/sshd
+          sudo mkdir -p initrd-tree/tmp
+          sudo mkdir -p initrd-tree/root
+
+      - name: Create device nodes
+        run: |
+          sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
+          sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
+          sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
+          sudo mknod -m 666 initrd-tree/dev/ttyS0 c 4 64 || true
 
       - name: Unmount chroot filesystems
         run: |
+          sudo umount rootfs/dev/pts || true
           sudo umount rootfs/dev || true
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      - name: Build initramfs
+      - name: Build final initramfs
         run: |
-          cd rootfs
-
+          cd initrd-tree
           sudo find . -print0 | sudo cpio --null -ov --format=newc | gzip -9 > ../initramfs-amd64.cpio.gz
 
       - name: Upload initramfs artifact
