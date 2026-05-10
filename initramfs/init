@@ -15,6 +15,26 @@ echo "[runtime] provisioning runtime booted"
 
 hostname provisioner
 
+## MODULE INITIALISATION
+
+echo
+echo "[modules] preparing module tree"
+
+depmod -a 2>/dev/null || true
+
+echo
+echo "[modules] auto-loading hardware drivers"
+
+find /sys/devices -name modalias -exec cat {} \; | \
+    sort -u | \
+    xargs modprobe -abq 2>/dev/null || true
+
+sleep 2
+
+echo
+echo "[modules] loaded modules:"
+lsmod || true
+
 # Loopback
 ip link set lo up 2>/dev/null || true
 
@@ -76,4 +96,8 @@ echo
 echo "[runtime] entering shell"
 
 # FINAL: stable interactive shell (PID 1 must not exit)
-exec /bin/bash
+while true; do
+  /bin/bash
+  echo "[runtime] shell exited, restarting..."
+  sleep 1
+done
