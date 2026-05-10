@@ -13,6 +13,8 @@ jobs:
     env:
       DEBIAN_RELEASE: trixie
       DEBIAN_MIRROR: http://deb.debian.org/debian
+      KERNEL_VERSION: 6.12.73+deb13-amd64
+      KERNEL_PACKAGE_VERSION: 6.12.73-1
 
     steps:
       - name: Checkout repo
@@ -21,12 +23,14 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync
+          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync dpkg
 
       - name: Create working directories
         run: |
           mkdir -p rootfs
           mkdir -p initrd-tree
+          mkdir -p kerneldeb
+          mkdir -p kernelextract
 
       - name: Build Debian rootfs
         run: |
@@ -35,9 +39,9 @@ jobs:
       - name: Mount chroot filesystems
         run: |
           sudo mount --bind /dev rootfs/dev
-          sudo mount --bind /dev/pts rootfs/dev/pts
           sudo mount --bind /proc rootfs/proc
           sudo mount --bind /sys rootfs/sys
+          sudo mount --bind /dev/pts rootfs/dev/pts
 
       - name: Configure apt sources
         run: |
@@ -47,7 +51,7 @@ jobs:
           deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
           EOF
 
-      - name: Install provisioning runtime
+      - name: Install provisioning packages
         run: |
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
@@ -55,16 +59,8 @@ jobs:
             apt-get update
 
             apt-get install -y --no-install-recommends \
-              linux-image-amd64 \
-              initramfs-tools \
-              firmware-linux \
-              firmware-linux-free \
-              firmware-linux-nonfree \
-              firmware-realtek \
-              firmware-misc-nonfree \
               systemd \
               systemd-sysv \
-              systemd-resolved \
               dbus \
               dbus-broker \
               libpam-systemd \
@@ -83,6 +79,7 @@ jobs:
               ca-certificates \
               openssh-server \
               openssh-client \
+              ssh \
               tmux \
               vim-tiny \
               less \
@@ -101,35 +98,37 @@ jobs:
               python3 \
               kbd \
               console-setup \
-              console-data \
-              keyboard-configuration \
               acpid \
               minicom \
               lrzsz \
-              ckermit
+              ckermit \
+              systemd-resolved \
+              firmware-linux-free \
+              firmware-linux-nonfree \
+              firmware-realtek \
+              firmware-misc-nonfree
 
-            apt-get purge -y \
-              gcc \
-              gcc-12 \
-              cpp \
-              cpp-12 \
-              exim4-base \
-              exim4-config \
-              exim4-daemon-light \
-              bsd-mailx \
-              make \
-              fakeroot \
-              manpages-dev || true
-
-            apt-get autoremove -y
             apt-get clean
-
-            rm -rf /var/lib/apt/lists/*
-            rm -rf /usr/share/doc/*
-            rm -rf /usr/share/man/*
-            rm -rf /usr/share/info/*
-            rm -rf /tmp/*
           "
+
+      - name: Download matching kernel module packages
+        run: |
+          cd kerneldeb
+
+          wget http://deb.debian.org/debian/pool/main/l/linux/linux-image-${KERNEL_VERSION}_${KERNEL_PACKAGE_VERSION}_amd64.deb
+
+      - name: Extract matching kernel modules
+        run: |
+          dpkg-deb -x \
+            kerneldeb/linux-image-${KERNEL_VERSION}_${KERNEL_PACKAGE_VERSION}_amd64.deb \
+            kernelextract
+
+          sudo mkdir -p rootfs/lib
+          sudo cp -a kernelextract/lib/modules rootfs/lib/
+
+      - name: Generate module dependency database
+        run: |
+          sudo depmod -b rootfs ${KERNEL_VERSION}
 
       - name: Configure keyboard
         run: |
@@ -151,6 +150,8 @@ jobs:
           [Match]
           Name=en*
           Name=eth*
+          Name=eno*
+          Name=ens*
 
           [Network]
           DHCP=yes
@@ -158,7 +159,7 @@ jobs:
 
           sudo ln -sf /run/systemd/resolve/stub-resolv.conf rootfs/etc/resolv.conf
 
-      - name: Configure root password
+      - name: Configure root account
         run: |
           echo 'root:root' | sudo chroot rootfs chpasswd
 
@@ -167,7 +168,7 @@ jobs:
           sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' rootfs/etc/ssh/sshd_config
           sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' rootfs/etc/ssh/sshd_config
 
-      - name: Configure root autologin
+      - name: Configure automatic root login
         run: |
           sudo mkdir -p rootfs/etc/systemd/system/getty@tty1.service.d
           sudo mkdir -p rootfs/etc/systemd/system/serial-getty@ttyS0.service.d
@@ -184,35 +185,48 @@ jobs:
           ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,38400,9600 %I \$TERM
           EOF
 
-      - name: Install hardware collector
+      - name: Install hardware inventory collector
         run: |
           cat << 'EOF' | sudo tee rootfs/usr/local/bin/hwcollect.sh
           #!/bin/bash
 
-          OUT=/root/hardware.json
+          OUT="/root/hardware.json"
 
-          jq -n \
-            --arg hostname "$(hostname)" \
-            --arg kernel "$(uname -a)" \
-            --argjson network "$(ip -j addr)" \
-            --argjson blockdevices "$(lsblk -J)" \
-            --arg lspci "$(lspci -mm)" \
-            --arg lsusb "$(lsusb)" \
-            --arg dmidecode "$(dmidecode)" \
-            '{
-              hostname: $hostname,
-              kernel: $kernel,
-              network: $network,
-              blockdevices: $blockdevices,
-              lspci: $lspci,
-              lsusb: $lsusb,
-              dmidecode: $dmidecode
-            }' > $OUT
+          echo "{" > $OUT
+
+          echo '"hostname":' >> $OUT
+          hostnamectl --json=short 2>/dev/null || hostname | jq -R . >> $OUT
+          echo "," >> $OUT
+
+          echo '"kernel":' >> $OUT
+          uname -a | jq -R . >> $OUT
+          echo "," >> $OUT
+
+          echo '"lspci":' >> $OUT
+          lspci -mm | jq -R -s 'split("\n")[:-1]' >> $OUT
+          echo "," >> $OUT
+
+          echo '"lsusb":' >> $OUT
+          lsusb | jq -R -s 'split("\n")[:-1]' >> $OUT
+          echo "," >> $OUT
+
+          echo '"blockdevices":' >> $OUT
+          lsblk -J >> $OUT
+          echo "," >> $OUT
+
+          echo '"network":' >> $OUT
+          ip -j addr >> $OUT
+          echo "," >> $OUT
+
+          echo '"dmidecode":' >> $OUT
+          dmidecode | jq -R -s . >> $OUT
+
+          echo "}" >> $OUT
           EOF
 
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
 
-      - name: Install hardware collector service
+      - name: Install hardware inventory service
         run: |
           cat << EOF | sudo tee rootfs/etc/systemd/system/hwcollect.service
           [Unit]
@@ -227,13 +241,13 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-      - name: Enable services
+      - name: Enable systemd services
         run: |
           sudo chroot rootfs systemctl enable ssh
           sudo chroot rootfs systemctl enable systemd-networkd
           sudo chroot rootfs systemctl enable systemd-resolved
-          sudo chroot rootfs systemctl enable getty@tty1.service
           sudo chroot rootfs systemctl enable serial-getty@ttyS0.service
+          sudo chroot rootfs systemctl enable getty@tty1.service
           sudo chroot rootfs systemctl enable hwcollect.service
           sudo chroot rootfs systemctl set-default multi-user.target
 
@@ -256,37 +270,68 @@ jobs:
 
           sudo chroot rootfs systemctl enable provisioning.service
 
-      - name: Generate module metadata
+      - name: Remove build junk and shrink image
         run: |
           sudo chroot rootfs /bin/bash -c "
-            KVER=\$(ls /lib/modules | head -1)
+            apt-get purge -y \
+              gcc \
+              gcc-12 \
+              cpp \
+              cpp-12 \
+              exim4-base \
+              exim4-config \
+              exim4-daemon-light \
+              make \
+              fakeroot \
+              manpages-dev \
+              bsd-mailx || true
 
-            echo 'Kernel version:' \$KVER
+            apt-get autoremove -y
+            apt-get clean
 
-            depmod -a \$KVER
+            rm -rf /var/lib/apt/lists/*
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/man/*
+            rm -rf /usr/share/info/*
+            rm -rf /tmp/*
           "
 
-      - name: Verify installed kernel and modules
+      - name: Verify installed tools
         run: |
           sudo chroot rootfs /bin/bash -c "
-            echo '=== INSTALLED KERNEL PACKAGES ==='
-            dpkg -l | grep linux-image
-
-            echo
-            echo '=== MODULE TREE ==='
+            echo '=== KERNEL ==='
             ls -l /lib/modules
-
             echo
-            echo '=== E1000E ==='
-            find /lib/modules -iname 'e1000e*'
 
+            echo '=== NETWORK MODULES ==='
+            find /lib/modules -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
             echo
-            echo '=== VMXNET3 ==='
-            find /lib/modules -iname 'vmxnet3*'
 
-            echo
-            echo '=== FIRMWARE ==='
-            ls /lib/firmware | head
+            echo '=== TOOL CHECK ==='
+
+            for x in \
+              ip \
+              curl \
+              wget \
+              sshd \
+              tmux \
+              vim \
+              lspci \
+              dmidecode \
+              nvme \
+              smartctl \
+              modprobe \
+              lsmod \
+              ethtool \
+              minicom \
+              sz \
+              rz \
+              kermit
+            do
+              echo
+              echo \"=== \$x ===\"
+              which \$x || true
+            done
           "
 
       - name: Unmount chroot filesystems
@@ -296,7 +341,7 @@ jobs:
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      - name: Copy runtime into initrd tree
+      - name: Copy rootfs into initrd tree
         run: |
           sudo rsync -aHAX \
             --exclude=/proc/* \
@@ -347,6 +392,8 @@ jobs:
 
       - name: Create device nodes
         run: |
+          sudo mkdir -p initrd-tree/dev
+
           sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
           sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
           sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
