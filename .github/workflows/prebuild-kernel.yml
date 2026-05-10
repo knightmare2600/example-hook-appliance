@@ -26,7 +26,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y make gcc g++ bc bison flex libssl-dev libelf-dev build-essential curl xz-utils git gcc-aarch64-linux-gnu
+          sudo apt-get install -y make gcc g++ bc bison flex libssl-dev libelf-dev build-essential curl xz-utils git gcc-aarch64-linux-gnu kmod
 
       - name: Fetch kernel
         run: |
@@ -44,22 +44,31 @@ jobs:
         run: |
           cd linux
           if [[ "${{ matrix.kernel }}" == "arm64" ]]; then
-            make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+            export ARCH=arm64
+            export CROSS_COMPILE=aarch64-linux-gnu-
           else
-            make -j$(nproc) ARCH=x86_64
+            export ARCH=x86_64
           fi
+          make -j$(nproc)
+          # ALSO build modules
+          make modules
 
-      - name: Package kernel
-        run: |
-          mkdir -p dist
-
-          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
-            cp linux/arch/x86/boot/bzImage dist/kernel-amd64
-          fi
-          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-            cp linux/arch/arm64/boot/Image.gz dist/kernel-arm64
-          fi
-          tar -czf kernel-${{ matrix.kernel }}.tar.gz -C dist .
+          - name: Package kernel + modules
+            run: |
+              mkdir -p dist
+              cd linux
+              if [[ "${{ matrix.kernel }}" == "arm64" ]]; then
+                export ARCH=arm64
+                export CROSS_COMPILE=aarch64-linux-gnu-
+                cp arch/arm64/boot/Image.gz ../dist/kernel-arm64
+              else
+                export ARCH=x86_64
+                cp arch/x86/boot/bzImage ../dist/kernel-amd64
+              fi
+              # Install kernel modules into staging dir
+              make modules_install INSTALL_MOD_PATH=../dist
+              cd ..
+              tar -czf kernel-${{ matrix.kernel }}.tar.gz -C dist .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
