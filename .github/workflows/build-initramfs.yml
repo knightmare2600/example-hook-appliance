@@ -12,7 +12,7 @@ jobs:
 
     env:
       DEBIAN_RELEASE: trixie
-      NETBOOT_URL: https://deb.debian.org/debian/dists/trixie/main/installer-amd64/current/images/netboot/debian-installer/amd64
+      DEBIAN_MIRROR: http://deb.debian.org/debian
 
     steps:
       - name: Checkout repo
@@ -21,44 +21,17 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap cpio gzip xz-utils zstd curl wget rsync file
+          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync
 
-      - name: Download Debian netboot kernel + initrd
+      - name: Create root filesystem
         run: |
-          mkdir -p upstream
-
-          curl -L -o upstream/linux ${NETBOOT_URL}/linux
-          curl -L -o upstream/initrd.img ${NETBOOT_URL}/initrd.gz
-
-          chmod +x upstream/linux
-
-      - name: Extract upstream initrd
-        run: |
-          mkdir -p initrd-tree
-
-          cd initrd-tree
-
-          FILETYPE=$(file ../upstream/initrd.img)
-
-          echo "$FILETYPE"
-
-          if echo "$FILETYPE" | grep -qi gzip; then
-            gzip -dc ../upstream/initrd.img | sudo cpio -idmv
-
-          elif echo "$FILETYPE" | grep -qi xz; then
-            xz -dc ../upstream/initrd.img | sudo cpio -idmv
-
-          elif echo "$FILETYPE" | grep -qi zstandard; then
-            zstd -dc ../upstream/initrd.img | sudo cpio -idmv
-
-          else
-            echo "Unknown initrd compression"
-            exit 1
-          fi
-
-      - name: Build provisioning rootfs
-        run: |
-          sudo debootstrap --arch=amd64 --variant=minbase --include=bash,coreutils,util-linux,procps,iproute2,isc-dhcp-client,python3 trixie rootfs http://deb.debian.org/debian
+          sudo debootstrap \
+            --arch=amd64 \
+            --variant=minbase \
+            --include=systemd,systemd-sysv,udev,kmod \
+            ${DEBIAN_RELEASE} \
+            rootfs \
+            ${DEBIAN_MIRROR}
 
       - name: Mount chroot filesystems
         run: |
@@ -66,7 +39,7 @@ jobs:
           sudo mount --bind /proc rootfs/proc
           sudo mount --bind /sys rootfs/sys
 
-      - name: Install provisioning packages
+      - name: Install runtime packages
         run: |
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
@@ -76,11 +49,27 @@ jobs:
             apt-get install -y \
               bash \
               busybox-static \
+              systemd \
+              systemd-sysv \
+              udev \
+              dbus \
+              kmod \
+              util-linux \
+              procps \
+              coreutils \
+              less \
+              file \
+              tar \
+              gzip \
+              bzip2 \
+              xz-utils \
+              rsync \
               iproute2 \
               net-tools \
               isc-dhcp-client \
               ifupdown \
               iputils-ping \
+              ethtool \
               curl \
               wget \
               jq \
@@ -99,29 +88,105 @@ jobs:
               nvme-cli \
               python3 \
               python3-pip \
-              ethtool \
-              kmod \
               kbd \
               console-setup \
               fbset \
               acpid \
-              less \
-              file \
-              rsync \
-              tar \
-              gzip \
-              bzip2 \
-              xz-utils \
-              firmware-linux \
-              firmware-linux-free \
-              firmware-misc-nonfree \
-              firmware-realtek \
-              firmware-iwlwifi \
-              firmware-amd-graphics \
-              firmware-intel-graphics
+              login \
+              passwd \
+              sudo \
+              tzdata \
+              locales
+
+            systemctl enable ssh
+            systemctl enable systemd-networkd
+            systemctl enable systemd-resolved
+            systemctl enable serial-getty@ttyS0.service
 
             apt-get clean
           "
+
+      - name: Configure networking
+        run: |
+          sudo mkdir -p rootfs/etc/systemd/network
+
+          cat << 'EOF' | sudo tee rootfs/etc/systemd/network/20-wired.network
+          [Match]
+          Name=en* eth*
+
+          [Network]
+          DHCP=yes
+          EOF
+
+      - name: Configure root account
+        run: |
+          echo 'root:root' | sudo chroot rootfs chpasswd
+
+      - name: Configure SSH
+        run: |
+          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' rootfs/etc/ssh/sshd_config
+          sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' rootfs/etc/ssh/sshd_config
+
+      - name: Install provisioning service
+        run: |
+          sudo mkdir -p rootfs/etc/systemd/system
+
+          cat << 'EOF' | sudo tee rootfs/etc/systemd/system/provisioning.service
+          [Unit]
+          Description=Provisioning Runtime Task
+          After=network-online.target ssh.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/provisioning-task.sh
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          sudo mkdir -p rootfs/usr/local/bin
+
+          cat << 'EOF' | sudo tee rootfs/usr/local/bin/provisioning-task.sh
+          #!/bin/bash
+
+          echo "Provisioning runtime started"
+          ip addr
+          EOF
+
+          sudo chmod +x rootfs/usr/local/bin/provisioning-task.sh
+
+          sudo chroot rootfs systemctl enable provisioning.service
+
+      - name: Install MOTD and shell config
+        run: |
+          sudo cp initramfs/motd rootfs/etc/motd || true
+          sudo cp initramfs/bashrc rootfs/root/.bashrc || true
+
+      - name: Copy collector and overlay
+        run: |
+          sudo mkdir -p rootfs/collector
+          sudo mkdir -p rootfs/overlay
+
+          sudo cp -r collector/* rootfs/collector/ || true
+          sudo cp -r overlay/* rootfs/overlay/ || true
+
+      - name: Create runtime directories
+        run: |
+          sudo mkdir -p rootfs/run
+          sudo mkdir -p rootfs/run/sshd
+          sudo mkdir -p rootfs/var/run
+          sudo mkdir -p rootfs/var/run/sshd
+          sudo mkdir -p rootfs/root
+          sudo mkdir -p rootfs/tmp
+
+      - name: Create device nodes
+        run: |
+          sudo mknod -m 622 rootfs/dev/console c 5 1 || true
+          sudo mknod -m 666 rootfs/dev/null c 1 3 || true
+          sudo mknod -m 666 rootfs/dev/tty c 5 0 || true
+          sudo mknod -m 666 rootfs/dev/ttyS0 c 4 64 || true
 
       - name: Verify installed tools
         run: |
@@ -143,12 +208,18 @@ jobs:
               modprobe \
               lsmod \
               ethtool \
-              ifconfig
+              ifconfig \
+              login \
+              systemctl
             do
               echo
               echo \"=== \$x ===\"
               which \$x || true
             done
+
+            echo
+            echo '=== SYSTEMD DEFAULT TARGET ==='
+            systemctl get-default || true
           "
 
       - name: Unmount chroot filesystems
@@ -157,71 +228,22 @@ jobs:
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      - name: Copy runtime into initrd
+      - name: Build initramfs
         run: |
-          sudo rsync -a rootfs/ initrd-tree/
+          cd rootfs
 
-      - name: Install custom init
-        run: |
-          sudo cp initramfs/init initrd-tree/init
-          sudo chmod +x initrd-tree/init
-
-      - name: Install MOTD and shell config
-        run: |
-          sudo cp initramfs/motd initrd-tree/etc/motd || true
-          sudo cp initramfs/bashrc initrd-tree/root/.bashrc || true
-
-      - name: Copy collector and overlay
-        run: |
-          sudo mkdir -p initrd-tree/collector
-          sudo mkdir -p initrd-tree/overlay
-
-          sudo cp -r collector/* initrd-tree/collector/ || true
-          sudo cp -r overlay/* initrd-tree/overlay/ || true
-
-      - name: Configure root account
-        run: |
-          echo 'root:root' | sudo chroot initrd-tree chpasswd || true
-
-      - name: Enable SSH login
-        run: |
-          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' initrd-tree/etc/ssh/sshd_config || true
-          sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' initrd-tree/etc/ssh/sshd_config || true
-
-      - name: Create runtime directories
-        run: |
-          sudo mkdir -p initrd-tree/run/sshd
-          sudo mkdir -p initrd-tree/var/run/sshd
-          sudo mkdir -p initrd-tree/root
-
-      - name: Create device nodes
-        run: |
-          sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
-          sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
-          sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
-
-      - name: Build final initramfs
-        run: |
-          cd initrd-tree
-
-          sudo find . -print0 | \
-            sudo cpio --null -ov --format=newc | \
-            gzip -9 > ../initramfs-amd64.cpio.gz
+          sudo find . -print0 | sudo cpio --null -ov --format=newc | gzip -9 > ../initramfs-amd64.cpio.gz
 
       - name: Upload initramfs artifact
         uses: actions/upload-artifact@v4
         with:
           name: initramfs-amd64
-          path: |
-            initramfs-amd64.cpio.gz
-            upstream/linux
+          path: initramfs-amd64.cpio.gz
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: provisioning-runtime
-          files: |
-            initramfs-amd64.cpio.gz
-            upstream/linux
+          files: initramfs-amd64.cpio.gz
         env:
           GITHUB_TOKEN: ${{ github.token }}
