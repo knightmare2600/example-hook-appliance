@@ -26,22 +26,31 @@ jobs:
       - name: Download Debian netboot kernel + initrd
         run: |
           mkdir -p upstream
+
           curl -L -o upstream/linux ${NETBOOT_URL}/linux
           curl -L -o upstream/initrd.img ${NETBOOT_URL}/initrd.gz
+
           chmod +x upstream/linux
 
       - name: Extract upstream initrd
         run: |
           mkdir -p initrd-tree
+
           cd initrd-tree
+
           FILETYPE=$(file ../upstream/initrd.img)
+
           echo "$FILETYPE"
+
           if echo "$FILETYPE" | grep -qi gzip; then
             gzip -dc ../upstream/initrd.img | sudo cpio -idmv
+
           elif echo "$FILETYPE" | grep -qi xz; then
             xz -dc ../upstream/initrd.img | sudo cpio -idmv
+
           elif echo "$FILETYPE" | grep -qi zstandard; then
             zstd -dc ../upstream/initrd.img | sudo cpio -idmv
+
           else
             echo "Unknown initrd compression"
             exit 1
@@ -61,7 +70,9 @@ jobs:
         run: |
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
+
             apt-get update
+
             apt-get install -y \
               bash \
               busybox-static \
@@ -108,9 +119,10 @@ jobs:
               firmware-iwlwifi \
               firmware-amd-graphics \
               firmware-intel-graphics
+
             apt-get clean
           "
-          
+
       - name: Verify installed tools
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -163,6 +175,7 @@ jobs:
         run: |
           sudo mkdir -p initrd-tree/collector
           sudo mkdir -p initrd-tree/overlay
+
           sudo cp -r collector/* initrd-tree/collector/ || true
           sudo cp -r overlay/* initrd-tree/overlay/ || true
 
@@ -190,6 +203,7 @@ jobs:
       - name: Build final initramfs
         run: |
           cd initrd-tree
+
           sudo find . -print0 | \
             sudo cpio --null -ov --format=newc | \
             gzip -9 > ../initramfs-amd64.cpio.gz
