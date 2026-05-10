@@ -49,9 +49,21 @@ jobs:
             jammy \
             stage/amd64
 
-      - name: Extract kernel + modules into rootfs
+      - name: Extract kernel modules into rootfs
         run: |
-          sudo tar -xzf kernel-amd64.tar.gz -C stage/amd64
+          mkdir -p kernel-extract
+
+          sudo tar -xzf kernel-amd64.tar.gz -C kernel-extract
+
+          echo
+          echo "=== KERNEL PACKAGE CONTENTS ==="
+          find kernel-extract | head -50
+
+          # Copy ONLY kernel modules
+          if [ -d kernel-extract/lib/modules ]; then
+            sudo mkdir -p stage/amd64/lib
+            sudo cp -a kernel-extract/lib/modules stage/amd64/lib/
+          fi
 
       - name: Mount pseudo filesystems
         run: |
