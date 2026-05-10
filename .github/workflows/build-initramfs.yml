@@ -207,7 +207,7 @@ jobs:
               lspci: $lspci,
               lsusb: $lsusb,
               dmidecode: $dmidecode
-            }' > \$OUT
+            }' > $OUT
           EOF
 
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
@@ -258,11 +258,21 @@ jobs:
 
       - name: Generate module metadata
         run: |
-          sudo chroot rootfs depmod -a
+          sudo chroot rootfs /bin/bash -c "
+            KVER=\$(ls /lib/modules | head -1)
 
-      - name: Verify modules and firmware
+            echo 'Kernel version:' \$KVER
+
+            depmod -a \$KVER
+          "
+
+      - name: Verify installed kernel and modules
         run: |
           sudo chroot rootfs /bin/bash -c "
+            echo '=== INSTALLED KERNEL PACKAGES ==='
+            dpkg -l | grep linux-image
+
+            echo
             echo '=== MODULE TREE ==='
             ls -l /lib/modules
 
