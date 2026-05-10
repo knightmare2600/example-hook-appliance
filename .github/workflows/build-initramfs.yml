@@ -192,7 +192,13 @@ jobs:
 
       - name: Copy rootfs into initrd tree
         run: |
-          sudo rsync -aHAX rootfs/ initrd-tree/
+          sudo rsync -aHAX \
+            --exclude=/proc/* \
+            --exclude=/sys/* \
+            --exclude=/dev/* \
+            --exclude=/run/* \
+            --exclude=/tmp/* \
+            rootfs/ initrd-tree/
 
       - name: Install bootstrap init
         run: |
