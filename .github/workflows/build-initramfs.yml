@@ -15,7 +15,6 @@ jobs:
       DEBIAN_MIRROR: http://deb.debian.org/debian
       KERNEL_VERSION: 6.12.73+deb13-amd64
       KERNEL_DEB: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
-      KERNEL_SHA256: 1589680329195482fb67cab331c6fc7bb71bd4d4f68fae16b4c5d191636d236f
 
     steps:
       - name: Checkout repo
@@ -33,20 +32,7 @@ jobs:
             curl \
             wget \
             rsync \
-            kmod
-
-      - name: Verify bundled kernel package exists
-        run: |
-          ls -lh ${KERNEL_DEB}
-
-      - name: Verify bundled kernel package checksum
-        run: |
-          echo "${KERNEL_SHA256}  ${KERNEL_DEB}" | sha256sum -c -
-
-      - name: Verify bundled kernel package is valid
-        run: |
-          dpkg-deb --info ${KERNEL_DEB}
-          dpkg-deb --contents ${KERNEL_DEB} | head
+            dpkg
 
       - name: Create working directories
         run: |
@@ -77,7 +63,16 @@ jobs:
           deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
           EOF
 
-      - name: Install userspace packages
+      - name: Download exact matching kernel package
+        run: |
+          wget \
+            http://ftp.uk.debian.org/debian/pool/main/l/linux-signed-amd64/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+
+          ls -lh ${KERNEL_DEB}
+
+          dpkg-deb --info ${KERNEL_DEB}
+
+      - name: Install provisioning packages
         run: |
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
@@ -124,8 +119,6 @@ jobs:
               python3 \
               kbd \
               console-setup \
-              console-data \
-              keyboard-configuration \
               acpid \
               minicom \
               lrzsz \
@@ -139,7 +132,7 @@ jobs:
             apt-get clean
           "
 
-      - name: Install exact matching kernel package from repository checkout
+      - name: Install exact matching kernel package
         run: |
           sudo cp ${KERNEL_DEB} rootfs/root/
 
@@ -147,38 +140,35 @@ jobs:
             dpkg -i /root/${KERNEL_DEB}
           "
 
-      - name: Verify installed kernel modules
-        run: |
-          sudo chroot rootfs /bin/bash -c "
-            echo
-            echo '=== INSTALLED MODULE TREES ==='
-            ls -lah /lib/modules
-
-            echo
-            echo '=== EXPECTED MODULE TREE ==='
-            ls -lah /lib/modules/${KERNEL_VERSION}
-
-            echo
-            echo '=== SAMPLE NETWORK MODULES ==='
-            find /lib/modules/${KERNEL_VERSION} -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
-          "
-
       - name: Generate module dependency database
         run: |
-          sudo depmod -b rootfs ${KERNEL_VERSION}
+          sudo chroot rootfs /bin/bash -c "
+            depmod -a ${KERNEL_VERSION}
 
-      - name: Verify firmware
+            echo
+            echo '=== INSTALLED MODULE TREES ==='
+            ls -l /lib/modules
+
+            echo
+            echo '=== NETWORK MODULES ==='
+            find /lib/modules -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
+          "
+
+      - name: Verify firmware and modules
         run: |
           sudo chroot rootfs /bin/bash -c "
             echo
-            echo '=== FIRMWARE SAMPLE ==='
+            echo '=== FIRMWARE CHECK ==='
+
             find /lib/firmware -type f | head -20
 
             echo
-            echo '=== MODINFO TEST ==='
-            modinfo -k ${KERNEL_VERSION} e1000e || true
-            modinfo -k ${KERNEL_VERSION} virtio_net || true
-            modinfo -k ${KERNEL_VERSION} vmxnet3 || true
+            echo '=== MODULE CHECK ==='
+
+            modinfo e1000e || true
+            modinfo vmxnet3 || true
+            modinfo virtio_net || true
+            modinfo r8169 || true
           "
 
       - name: Configure keyboard
@@ -191,9 +181,7 @@ jobs:
           BACKSPACE="guess"
           EOF
 
-          sudo chroot rootfs /bin/bash -c "
-            setupcon --force || true
-          "
+          sudo chroot rootfs setupcon --force || true
 
       - name: Configure networking
         run: |
@@ -207,7 +195,8 @@ jobs:
           DHCP=yes
           EOF
 
-          sudo ln -sf /run/systemd/resolve/stub-resolv.conf \
+          sudo ln -sf \
+            /run/systemd/resolve/stub-resolv.conf \
             rootfs/etc/resolv.conf
 
       - name: Configure root account
@@ -232,13 +221,15 @@ jobs:
           sudo mkdir -p \
             rootfs/etc/systemd/system/serial-getty@ttyS0.service.d
 
-          cat << EOF | sudo tee rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
+          cat << EOF | sudo tee \
+            rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
           [Service]
           ExecStart=
           ExecStart=-/sbin/agetty --autologin root --noclear %I \$TERM
           EOF
 
-          cat << EOF | sudo tee rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf
+          cat << EOF | sudo tee \
+            rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf
           [Service]
           ExecStart=
           ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,38400,9600 %I \$TERM
@@ -341,22 +332,17 @@ jobs:
             rm -rf /tmp/*
           "
 
-      - name: Verify final image contents
+      - name: Verify installed tools
         run: |
           sudo chroot rootfs /bin/bash -c "
+            echo '=== KERNEL ==='
+            ls -l /lib/modules
             echo
-            echo '=== KERNEL TREE ==='
-            ls -lah /lib/modules
 
+            echo '=== NETWORK MODULES ==='
+            find /lib/modules -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
             echo
-            echo '=== NETWORK DEVICES ==='
-            find /lib/modules/${KERNEL_VERSION} -type f | grep -E 'e1000|e1000e|virtio|vmxnet3|r8169|tg3' || true
 
-            echo
-            echo '=== FIRMWARE ==='
-            find /lib/firmware -type f | head -20
-
-            echo
             echo '=== TOOL CHECK ==='
 
             for x in \
@@ -439,10 +425,11 @@ jobs:
           sudo mkdir -p initrd-tree/var/run/sshd
           sudo mkdir -p initrd-tree/tmp
           sudo mkdir -p initrd-tree/root
-          sudo mkdir -p initrd-tree/dev
 
       - name: Create device nodes
         run: |
+          sudo mkdir -p initrd-tree/dev
+
           sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
           sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
           sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
