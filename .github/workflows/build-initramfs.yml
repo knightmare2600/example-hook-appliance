@@ -14,6 +14,7 @@ jobs:
       DEBIAN_RELEASE: trixie
       DEBIAN_MIRROR: http://deb.debian.org/debian
       KERNEL_VERSION: 6.12.73+deb13-amd64
+      KERNEL_DEB: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
 
     steps:
       - name: Checkout repo
@@ -22,12 +23,16 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync
+          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync kmod
 
       - name: Create working directories
         run: |
           mkdir -p rootfs
           mkdir -p initrd-tree
+
+      - name: Verify bundled kernel package exists
+        run: |
+          ls -lh ${KERNEL_DEB}
 
       - name: Build Debian rootfs
         run: |
@@ -48,7 +53,7 @@ jobs:
           deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
           EOF
 
-      - name: Install provisioning packages
+      - name: Install userspace packages
         run: |
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
@@ -95,6 +100,8 @@ jobs:
               python3 \
               kbd \
               console-setup \
+              console-data \
+              keyboard-configuration \
               acpid \
               minicom \
               lrzsz \
@@ -103,73 +110,64 @@ jobs:
               firmware-linux-free \
               firmware-linux-nonfree \
               firmware-realtek \
-              firmware-misc-nonfree \
-              linux-image-${KERNEL_VERSION}
+              firmware-misc-nonfree
+          "
 
-            apt-get purge -y \
-              gcc \
-              gcc-14 \
-              cpp \
-              cpp-14 \
-              exim4-base \
-              exim4-config \
-              exim4-daemon-light \
-              make \
-              fakeroot \
-              manpages-dev \
-              bsd-mailx || true
+      - name: Install exact bundled kernel package
+        run: |
+          sudo cp ${KERNEL_DEB} rootfs/root/
 
-            apt-get autoremove -y
-            apt-get clean
+          sudo chroot rootfs /bin/bash -c "
+            dpkg -i /root/${KERNEL_DEB}
 
-            rm -rf /var/lib/apt/lists/*
-            rm -rf /usr/share/doc/*
-            rm -rf /usr/share/man/*
-            rm -rf /usr/share/info/*
-            rm -rf /tmp/*
+            apt-get -fy install
           "
 
       - name: Generate module dependency database
         run: |
-          sudo chroot rootfs /bin/bash -c "
-            depmod -a ${KERNEL_VERSION}
+          sudo depmod -b rootfs ${KERNEL_VERSION}
 
-            echo
-            echo '=== INSTALLED MODULE TREES ==='
-            ls -l /lib/modules
-
-            echo
-            echo '=== NETWORK MODULES ==='
-            find /lib/modules -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
-          "
-
-      - name: Verify firmware
+      - name: Verify kernel modules and firmware
         run: |
           sudo chroot rootfs /bin/bash -c "
             echo
-            echo '=== FIRMWARE CHECK ==='
-
-            find /lib/firmware -type f | head -20
-
+            echo '=== MODULE TREE ==='
+            ls -l /lib/modules
             echo
-            echo '=== MODULE CHECK ==='
 
+            echo '=== EXPECTED MODULE PATH ==='
+            ls -ld /lib/modules/${KERNEL_VERSION}
+            echo
+
+            echo '=== NETWORK DRIVERS ==='
+            find /lib/modules/${KERNEL_VERSION} -type f | \
+              grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3|bnx2|igc' || true
+            echo
+
+            echo '=== FIRMWARE ==='
+            find /lib/firmware -type f | head -50
+            echo
+
+            echo '=== MODINFO ==='
             modinfo e1000e || true
             modinfo vmxnet3 || true
             modinfo virtio_net || true
+            modinfo r8169 || true
           "
 
       - name: Configure keyboard
         run: |
           cat << EOF | sudo tee rootfs/etc/default/keyboard
-          XKBMODEL=\"pc105\"
-          XKBLAYOUT=\"gb\"
-          XKBVARIANT=\"\"
-          XKBOPTIONS=\"\"
-          BACKSPACE=\"guess\"
+          XKBMODEL="pc105"
+          XKBLAYOUT="gb"
+          XKBVARIANT=""
+          XKBOPTIONS=""
+          BACKSPACE="guess"
           EOF
 
-          sudo chroot rootfs setupcon --force || true
+          sudo chroot rootfs /bin/bash -c "
+            setupcon --force || true
+          "
 
       - name: Configure networking
         run: |
@@ -181,9 +179,12 @@ jobs:
 
           [Network]
           DHCP=yes
+          IPv6AcceptRA=yes
           EOF
 
-          sudo ln -sf /run/systemd/resolve/stub-resolv.conf rootfs/etc/resolv.conf
+          sudo ln -sf \
+            /run/systemd/resolve/stub-resolv.conf \
+            rootfs/etc/resolv.conf
 
       - name: Configure root account
         run: |
@@ -191,21 +192,31 @@ jobs:
 
       - name: Enable SSH root login
         run: |
-          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' rootfs/etc/ssh/sshd_config
-          sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' rootfs/etc/ssh/sshd_config
+          sudo sed -i \
+            's/^#PermitRootLogin.*/PermitRootLogin yes/' \
+            rootfs/etc/ssh/sshd_config
+
+          sudo sed -i \
+            's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
+            rootfs/etc/ssh/sshd_config
 
       - name: Configure automatic root login
         run: |
-          sudo mkdir -p rootfs/etc/systemd/system/getty@tty1.service.d
-          sudo mkdir -p rootfs/etc/systemd/system/serial-getty@ttyS0.service.d
+          sudo mkdir -p \
+            rootfs/etc/systemd/system/getty@tty1.service.d
 
-          cat << EOF | sudo tee rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
+          sudo mkdir -p \
+            rootfs/etc/systemd/system/serial-getty@ttyS0.service.d
+
+          cat << EOF | sudo tee \
+            rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
           [Service]
           ExecStart=
           ExecStart=-/sbin/agetty --autologin root --noclear %I \$TERM
           EOF
 
-          cat << EOF | sudo tee rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf
+          cat << EOF | sudo tee \
+            rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf
           [Service]
           ExecStart=
           ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,38400,9600 %I \$TERM
@@ -282,15 +293,46 @@ jobs:
           sudo chroot rootfs systemctl enable provisioning.service
           sudo chroot rootfs systemctl set-default multi-user.target
 
+      - name: Remove build junk and shrink image
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            apt-get purge -y \
+              gcc \
+              gcc-14 \
+              cpp \
+              cpp-14 \
+              exim4-base \
+              exim4-config \
+              exim4-daemon-light \
+              make \
+              fakeroot \
+              manpages-dev \
+              bsd-mailx || true
+
+            apt-get autoremove -y
+            apt-get clean
+
+            rm -rf /var/lib/apt/lists/*
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/man/*
+            rm -rf /usr/share/info/*
+            rm -rf /tmp/*
+          "
+
       - name: Verify installed tools
         run: |
           sudo chroot rootfs /bin/bash -c "
             echo '=== KERNEL ==='
+            uname -r || true
+            echo
+
+            echo '=== MODULES ==='
             ls -l /lib/modules
             echo
 
             echo '=== NETWORK MODULES ==='
-            find /lib/modules -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
+            find /lib/modules/${KERNEL_VERSION} -type f | \
+              grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3|bnx2|igc' || true
             echo
 
             echo '=== TOOL CHECK ==='
@@ -388,7 +430,10 @@ jobs:
       - name: Build final initramfs
         run: |
           cd initrd-tree
-          sudo find . -print0 | sudo cpio --null -ov --format=newc | gzip -9 > ../initramfs-amd64.cpio.gz
+
+          sudo find . -print0 | \
+            sudo cpio --null -ov --format=newc | \
+            gzip -9 > ../initramfs-amd64.cpio.gz
 
       - name: Upload initramfs artifact
         uses: actions/upload-artifact@v4
