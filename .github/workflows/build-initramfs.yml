@@ -33,7 +33,6 @@ jobs:
             wget \
             rsync \
             dpkg \
-            linux-base \
             initramfs-tools
 
       - name: Create working directories
@@ -153,7 +152,18 @@ jobs:
           sudo cp ${KERNEL_DEB} rootfs/root/
 
           sudo chroot rootfs /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+
+            apt-get install -y \
+              linux-base \
+              kmod \
+              initramfs-tools
+
             dpkg -i /root/${KERNEL_DEB}
+
+            apt-get -f install -y
           "
 
       - name: Generate module dependency database
@@ -190,11 +200,11 @@ jobs:
       - name: Configure keyboard
         run: |
           cat << EOF | sudo tee rootfs/etc/default/keyboard
-          XKBMODEL="pc105"
-          XKBLAYOUT="gb"
-          XKBVARIANT=""
-          XKBOPTIONS=""
-          BACKSPACE="guess"
+          XKBMODEL=\"pc105\"
+          XKBLAYOUT=\"gb\"
+          XKBVARIANT=\"\"
+          XKBOPTIONS=\"\"
+          BACKSPACE=\"guess\"
           EOF
 
           sudo chroot rootfs setupcon --force || true
@@ -205,7 +215,7 @@ jobs:
 
           cat << EOF | sudo tee rootfs/etc/systemd/network/20-wired.network
           [Match]
-          Type=ether
+          Name=eth*
 
           [Network]
           DHCP=yes
@@ -348,44 +358,6 @@ jobs:
             rm -rf /tmp/*
           "
 
-      - name: Verify installed tools
-        run: |
-          sudo chroot rootfs /bin/bash -c "
-            echo '=== KERNEL ==='
-            ls -l /lib/modules
-            echo
-
-            echo '=== NETWORK MODULES ==='
-            find /lib/modules -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
-            echo
-
-            echo '=== TOOL CHECK ==='
-
-            for x in \
-              ip \
-              curl \
-              wget \
-              sshd \
-              tmux \
-              vim \
-              lspci \
-              dmidecode \
-              nvme \
-              smartctl \
-              modprobe \
-              lsmod \
-              ethtool \
-              minicom \
-              sz \
-              rz \
-              kermit
-            do
-              echo
-              echo \"=== \$x ===\"
-              which \$x || true
-            done
-          "
-
       - name: Unmount chroot filesystems
         run: |
           sudo umount rootfs/dev/pts || true
@@ -412,44 +384,12 @@ jobs:
           mount -t proc proc /proc
           mount -t sysfs sysfs /sys
           mount -t tmpfs tmpfs /run
-
           mkdir -p /run/lock
           mkdir -p /var/run
-
           exec /lib/systemd/systemd
           EOF
 
           sudo chmod +x initrd-tree/init
-
-      - name: Install MOTD and shell config
-        run: |
-          sudo cp initramfs/motd initrd-tree/etc/motd || true
-          sudo cp initramfs/bashrc initrd-tree/root/.bashrc || true
-
-      - name: Copy collector and overlay
-        run: |
-          sudo mkdir -p initrd-tree/collector
-          sudo mkdir -p initrd-tree/overlay
-
-          sudo cp -r collector/* initrd-tree/collector/ || true
-          sudo cp -r overlay/* initrd-tree/overlay/ || true
-
-      - name: Create runtime directories
-        run: |
-          sudo mkdir -p initrd-tree/run
-          sudo mkdir -p initrd-tree/run/sshd
-          sudo mkdir -p initrd-tree/var/run/sshd
-          sudo mkdir -p initrd-tree/tmp
-          sudo mkdir -p initrd-tree/root
-
-      - name: Create device nodes
-        run: |
-          sudo mkdir -p initrd-tree/dev
-
-          sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
-          sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
-          sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
-          sudo mknod -m 666 initrd-tree/dev/ttyS0 c 4 64 || true
 
       - name: Build final initramfs
         run: |
