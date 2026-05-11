@@ -65,13 +65,13 @@ jobs:
 
       - name: Download exact matching kernel package
         run: |
-          wget \
-            http://ftp.uk.debian.org/debian/pool/main/l/linux-signed-amd64/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
-
+          rm -f ${KERNEL_DEB}
+          rm -f ${KERNEL_DEB}.1
+          wget  -O ${KERNEL_DEB} http://ftp.uk.debian.org/debian/pool/main/l/linux-signed-amd64/${KERNEL_DEB}
           ls -lh ${KERNEL_DEB}
-
+          file ${KERNEL_DEB}
           dpkg-deb --info ${KERNEL_DEB}
-
+          
       - name: Install provisioning packages
         run: |
           sudo chroot rootfs /bin/bash -c "
