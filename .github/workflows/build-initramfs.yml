@@ -128,7 +128,8 @@ jobs:
               firmware-linux-free \
               firmware-linux-nonfree \
               firmware-realtek \
-              firmware-misc-nonfree
+              firmware-misc-nonfree \
+              linux-initramfs-tool
             apt-get clean
           "
           
