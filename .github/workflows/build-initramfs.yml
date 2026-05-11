@@ -80,6 +80,7 @@ jobs:
             apt-get update
 
             apt-get install -y --no-install-recommends \
+              linux-base \
               systemd \
               systemd-sysv \
               dbus \
@@ -128,10 +129,9 @@ jobs:
               firmware-linux-nonfree \
               firmware-realtek \
               firmware-misc-nonfree
-
             apt-get clean
           "
-
+          
       - name: Install exact matching kernel package
         run: |
           sudo cp ${KERNEL_DEB} rootfs/root/
