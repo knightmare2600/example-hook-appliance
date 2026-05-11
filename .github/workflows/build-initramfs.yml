@@ -34,8 +34,7 @@ jobs:
             rsync \
             dpkg \
             linux-base \
-            linux-initramfs-tool
-            
+            initramfs-tools
 
       - name: Create working directories
         run: |
@@ -70,11 +69,18 @@ jobs:
         run: |
           rm -f ${KERNEL_DEB}
           rm -f ${KERNEL_DEB}.1
-          wget  -O ${KERNEL_DEB} http://ftp.uk.debian.org/debian/pool/main/l/linux-signed-amd64/${KERNEL_DEB}
+
+          wget -O ${KERNEL_DEB} \
+            http://ftp.uk.debian.org/debian/pool/main/l/linux-signed-amd64/${KERNEL_DEB}
+
           ls -lh ${KERNEL_DEB}
+
           file ${KERNEL_DEB}
+
+          sha256sum ${KERNEL_DEB}
+
           dpkg-deb --info ${KERNEL_DEB}
-          
+
       - name: Install provisioning packages
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -84,6 +90,7 @@ jobs:
 
             apt-get install -y --no-install-recommends \
               linux-base \
+              initramfs-tools \
               systemd \
               systemd-sysv \
               dbus \
@@ -131,11 +138,11 @@ jobs:
               firmware-linux-free \
               firmware-linux-nonfree \
               firmware-realtek \
-              firmware-misc-nonfree \
-              linux-initramfs-tool
+              firmware-misc-nonfree
+
             apt-get clean
           "
-          
+
       - name: Install exact matching kernel package
         run: |
           sudo cp ${KERNEL_DEB} rootfs/root/
