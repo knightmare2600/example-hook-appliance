@@ -32,7 +32,10 @@ jobs:
             curl \
             wget \
             rsync \
-            dpkg
+            dpkg \
+            linux-base \
+            linux-initramfs-tool
+            
 
       - name: Create working directories
         run: |
