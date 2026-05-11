@@ -14,7 +14,6 @@ jobs:
       DEBIAN_RELEASE: trixie
       DEBIAN_MIRROR: http://deb.debian.org/debian
       KERNEL_VERSION: 6.12.73+deb13-amd64
-      KERNEL_PACKAGE_VERSION: 6.12.73-1
 
     steps:
       - name: Checkout repo
@@ -23,14 +22,12 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync dpkg
+          sudo apt-get install -y debootstrap cpio gzip xz-utils curl wget rsync
 
       - name: Create working directories
         run: |
           mkdir -p rootfs
           mkdir -p initrd-tree
-          mkdir -p kerneldeb
-          mkdir -p kernelextract
 
       - name: Build Debian rootfs
         run: |
@@ -106,38 +103,70 @@ jobs:
               firmware-linux-free \
               firmware-linux-nonfree \
               firmware-realtek \
-              firmware-misc-nonfree
+              firmware-misc-nonfree \
+              linux-image-${KERNEL_VERSION}
 
+            apt-get purge -y \
+              gcc \
+              gcc-14 \
+              cpp \
+              cpp-14 \
+              exim4-base \
+              exim4-config \
+              exim4-daemon-light \
+              make \
+              fakeroot \
+              manpages-dev \
+              bsd-mailx || true
+
+            apt-get autoremove -y
             apt-get clean
+
+            rm -rf /var/lib/apt/lists/*
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/man/*
+            rm -rf /usr/share/info/*
+            rm -rf /tmp/*
           "
-
-      - name: Download matching kernel module packages
-        run: |
-          cd kerneldeb
-
-          wget http://deb.debian.org/debian/pool/main/l/linux/linux-image-${KERNEL_VERSION}_${KERNEL_PACKAGE_VERSION}_amd64.deb
-
-      - name: Extract matching kernel modules
-        run: |
-          dpkg-deb -x \
-            kerneldeb/linux-image-${KERNEL_VERSION}_${KERNEL_PACKAGE_VERSION}_amd64.deb \
-            kernelextract
-
-          sudo mkdir -p rootfs/lib
-          sudo cp -a kernelextract/lib/modules rootfs/lib/
 
       - name: Generate module dependency database
         run: |
-          sudo depmod -b rootfs ${KERNEL_VERSION}
+          sudo chroot rootfs /bin/bash -c "
+            depmod -a ${KERNEL_VERSION}
+
+            echo
+            echo '=== INSTALLED MODULE TREES ==='
+            ls -l /lib/modules
+
+            echo
+            echo '=== NETWORK MODULES ==='
+            find /lib/modules -type f | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' || true
+          "
+
+      - name: Verify firmware
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            echo
+            echo '=== FIRMWARE CHECK ==='
+
+            find /lib/firmware -type f | head -20
+
+            echo
+            echo '=== MODULE CHECK ==='
+
+            modinfo e1000e || true
+            modinfo vmxnet3 || true
+            modinfo virtio_net || true
+          "
 
       - name: Configure keyboard
         run: |
           cat << EOF | sudo tee rootfs/etc/default/keyboard
-          XKBMODEL="pc105"
-          XKBLAYOUT="gb"
-          XKBVARIANT=""
-          XKBOPTIONS=""
-          BACKSPACE="guess"
+          XKBMODEL=\"pc105\"
+          XKBLAYOUT=\"gb\"
+          XKBVARIANT=\"\"
+          XKBOPTIONS=\"\"
+          BACKSPACE=\"guess\"
           EOF
 
           sudo chroot rootfs setupcon --force || true
@@ -148,10 +177,7 @@ jobs:
 
           cat << EOF | sudo tee rootfs/etc/systemd/network/20-wired.network
           [Match]
-          Name=en*
-          Name=eth*
-          Name=eno*
-          Name=ens*
+          Type=ether
 
           [Network]
           DHCP=yes
@@ -192,36 +218,23 @@ jobs:
 
           OUT="/root/hardware.json"
 
-          echo "{" > $OUT
-
-          echo '"hostname":' >> $OUT
-          hostnamectl --json=short 2>/dev/null || hostname | jq -R . >> $OUT
-          echo "," >> $OUT
-
-          echo '"kernel":' >> $OUT
-          uname -a | jq -R . >> $OUT
-          echo "," >> $OUT
-
-          echo '"lspci":' >> $OUT
-          lspci -mm | jq -R -s 'split("\n")[:-1]' >> $OUT
-          echo "," >> $OUT
-
-          echo '"lsusb":' >> $OUT
-          lsusb | jq -R -s 'split("\n")[:-1]' >> $OUT
-          echo "," >> $OUT
-
-          echo '"blockdevices":' >> $OUT
-          lsblk -J >> $OUT
-          echo "," >> $OUT
-
-          echo '"network":' >> $OUT
-          ip -j addr >> $OUT
-          echo "," >> $OUT
-
-          echo '"dmidecode":' >> $OUT
-          dmidecode | jq -R -s . >> $OUT
-
-          echo "}" >> $OUT
+          jq -n \
+            --arg hostname "$(hostname)" \
+            --arg kernel "$(uname -a)" \
+            --argjson network "$(ip -j addr)" \
+            --argjson blockdevices "$(lsblk -J)" \
+            --arg lspci "$(lspci -mm)" \
+            --arg lsusb "$(lsusb)" \
+            --arg dmidecode "$(dmidecode)" \
+            '{
+              hostname: $hostname,
+              kernel: $kernel,
+              network: $network,
+              blockdevices: $blockdevices,
+              lspci: $lspci,
+              lsusb: $lsusb,
+              dmidecode: $dmidecode
+            }' > ${OUT}
           EOF
 
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
@@ -241,16 +254,6 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-      - name: Enable systemd services
-        run: |
-          sudo chroot rootfs systemctl enable ssh
-          sudo chroot rootfs systemctl enable systemd-networkd
-          sudo chroot rootfs systemctl enable systemd-resolved
-          sudo chroot rootfs systemctl enable serial-getty@ttyS0.service
-          sudo chroot rootfs systemctl enable getty@tty1.service
-          sudo chroot rootfs systemctl enable hwcollect.service
-          sudo chroot rootfs systemctl set-default multi-user.target
-
       - name: Install provisioning service
         run: |
           cat << 'EOF' | sudo tee rootfs/etc/systemd/system/provisioning.service
@@ -268,33 +271,16 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-          sudo chroot rootfs systemctl enable provisioning.service
-
-      - name: Remove build junk and shrink image
+      - name: Enable systemd services
         run: |
-          sudo chroot rootfs /bin/bash -c "
-            apt-get purge -y \
-              gcc \
-              gcc-12 \
-              cpp \
-              cpp-12 \
-              exim4-base \
-              exim4-config \
-              exim4-daemon-light \
-              make \
-              fakeroot \
-              manpages-dev \
-              bsd-mailx || true
-
-            apt-get autoremove -y
-            apt-get clean
-
-            rm -rf /var/lib/apt/lists/*
-            rm -rf /usr/share/doc/*
-            rm -rf /usr/share/man/*
-            rm -rf /usr/share/info/*
-            rm -rf /tmp/*
-          "
+          sudo chroot rootfs systemctl enable ssh
+          sudo chroot rootfs systemctl enable systemd-networkd
+          sudo chroot rootfs systemctl enable systemd-resolved
+          sudo chroot rootfs systemctl enable serial-getty@ttyS0.service
+          sudo chroot rootfs systemctl enable getty@tty1.service
+          sudo chroot rootfs systemctl enable hwcollect.service
+          sudo chroot rootfs systemctl enable provisioning.service
+          sudo chroot rootfs systemctl set-default multi-user.target
 
       - name: Verify installed tools
         run: |
