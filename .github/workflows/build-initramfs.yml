@@ -138,7 +138,12 @@ jobs:
               firmware-linux-free \
               firmware-linux-nonfree \
               firmware-realtek \
-              firmware-misc-nonfree
+              firmware-misc-nonfree \
+              dhclient \
+              net-tools \
+              telnet \
+              nmap \
+              grc
 
             apt-get clean
           "
