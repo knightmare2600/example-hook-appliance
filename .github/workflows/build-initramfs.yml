@@ -1,3 +1,86 @@
+name: Build Provisioning Runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  initramfs:
+    runs-on: ubuntu-24.04
+
+    env:
+      DEBIAN_RELEASE: trixie
+      DEBIAN_MIRROR: http://deb.debian.org/debian
+      KERNEL_VERSION: 6.12.73+deb13-amd64
+      KERNEL_DEB: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            debootstrap \
+            cpio \
+            gzip \
+            xz-utils \
+            curl \
+            wget \
+            rsync \
+            dpkg \
+            linux-base \
+            initramfs-tools
+
+      - name: Create working directories
+        run: |
+          mkdir -p rootfs
+          mkdir -p initrd-tree
+
+      - name: Build Debian rootfs
+        run: |
+          sudo debootstrap \
+            --arch=amd64 \
+            --variant=minbase \
+            ${DEBIAN_RELEASE} \
+            rootfs \
+            ${DEBIAN_MIRROR}
+
+      - name: Mount chroot filesystems
+        run: |
+          sudo mount --bind /dev rootfs/dev
+          sudo mount --bind /proc rootfs/proc
+          sudo mount --bind /sys rootfs/sys
+          sudo mount --bind /dev/pts rootfs/dev/pts
+
+      - name: Configure apt sources
+        run: |
+          cat << EOF | sudo tee rootfs/etc/apt/sources.list
+          deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
+          EOF
+
+      - name: Download exact matching kernel package
+        run: |
+          rm -f ${KERNEL_DEB}
+          rm -f ${KERNEL_DEB}.1
+
+          wget -O ${KERNEL_DEB} \
+            http://ftp.uk.debian.org/debian/pool/main/l/linux-signed-amd64/${KERNEL_DEB}
+
+          ls -lh ${KERNEL_DEB}
+
+          file ${KERNEL_DEB}
+
+          sha256sum ${KERNEL_DEB}
+
+          dpkg-deb --info ${KERNEL_DEB}
+
       - name: Install provisioning packages
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -64,3 +147,332 @@
 
             apt-get clean
           "
+
+      - name: Install exact matching kernel package
+        run: |
+          sudo cp ${KERNEL_DEB} rootfs/root/
+
+          sudo chroot rootfs /bin/bash -c "
+            dpkg -i /root/${KERNEL_DEB}
+          "
+
+      - name: Generate module dependency database
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            depmod -a ${KERNEL_VERSION}
+
+            echo
+            echo '=== INSTALLED MODULE TREES ==='
+            ls -l /lib/modules
+
+            echo
+            echo '=== NETWORK MODULES ==='
+            find /lib/modules/${KERNEL_VERSION} -type f \
+              | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' \
+              || true
+          "
+
+      - name: Verify firmware and modules
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            echo
+            echo '=== FIRMWARE CHECK ==='
+
+            ls -l /lib/firmware || true
+
+            echo
+            echo '=== MODULE FILE CHECK ==='
+
+            find /lib/modules/${KERNEL_VERSION} -type f \
+              | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' \
+              || true
+          "
+
+      - name: Configure keyboard
+        run: |
+          cat << EOF | sudo tee rootfs/etc/default/keyboard
+          XKBMODEL="pc105"
+          XKBLAYOUT="gb"
+          XKBVARIANT=""
+          XKBOPTIONS=""
+          BACKSPACE="guess"
+          EOF
+
+          sudo chroot rootfs /usr/bin/setupcon --force || true
+
+      - name: Configure networking
+        run: |
+          sudo mkdir -p rootfs/etc/systemd/network
+
+          cat << EOF | sudo tee rootfs/etc/systemd/network/20-wired.network
+          [Match]
+          Name=eth*
+
+          [Network]
+          DHCP=yes
+          EOF
+
+          sudo ln -sf \
+            /run/systemd/resolve/stub-resolv.conf \
+            rootfs/etc/resolv.conf
+
+      - name: Configure root account
+        run: |
+          echo 'root:root' | sudo chroot rootfs chpasswd
+
+      - name: Enable SSH root login
+        run: |
+          sudo sed -i \
+            's/^#PermitRootLogin.*/PermitRootLogin yes/' \
+            rootfs/etc/ssh/sshd_config
+
+          sudo sed -i \
+            's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
+            rootfs/etc/ssh/sshd_config
+
+      - name: Configure automatic root login
+        run: |
+          sudo mkdir -p \
+            rootfs/etc/systemd/system/getty@tty1.service.d
+
+          sudo mkdir -p \
+            rootfs/etc/systemd/system/serial-getty@ttyS0.service.d
+
+          cat << EOF | sudo tee \
+            rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
+          [Service]
+          ExecStart=
+          ExecStart=-/sbin/agetty --autologin root --noclear %I \$TERM
+          EOF
+
+          cat << EOF | sudo tee \
+            rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf
+          [Service]
+          ExecStart=
+          ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,38400,9600 %I \$TERM
+          EOF
+
+      - name: Install hardware inventory collector
+        run: |
+          cat << 'EOF' | sudo tee rootfs/usr/local/bin/hwcollect.sh
+          #!/bin/bash
+
+          OUT="/root/hardware.json"
+
+          jq -n \
+            --arg hostname "$(hostname)" \
+            --arg kernel "$(uname -a)" \
+            --argjson network "$(ip -j addr)" \
+            --argjson blockdevices "$(lsblk -J)" \
+            --arg lspci "$(lspci -mm)" \
+            --arg lsusb "$(lsusb)" \
+            --arg dmidecode "$(dmidecode)" \
+            '{
+              hostname: $hostname,
+              kernel: $kernel,
+              network: $network,
+              blockdevices: $blockdevices,
+              lspci: $lspci,
+              lsusb: $lsusb,
+              dmidecode: $dmidecode
+            }' > ${OUT}
+          EOF
+
+          sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
+
+      - name: Install hardware inventory service
+        run: |
+          cat << EOF | sudo tee rootfs/etc/systemd/system/hwcollect.service
+          [Unit]
+          Description=Hardware Inventory Collection
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/hwcollect.sh
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+      - name: Install provisioning service
+        run: |
+          cat << 'EOF' | sudo tee rootfs/etc/systemd/system/provisioning.service
+          [Unit]
+          Description=Provisioning Runtime
+          After=network-online.target ssh.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/collector/start.sh
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+      - name: Enable systemd services
+        run: |
+          sudo chroot rootfs systemctl enable ssh
+          sudo chroot rootfs systemctl enable systemd-networkd
+          sudo chroot rootfs systemctl enable systemd-resolved
+          sudo chroot rootfs systemctl enable serial-getty@ttyS0.service
+          sudo chroot rootfs systemctl enable getty@tty1.service
+          sudo chroot rootfs systemctl enable hwcollect.service
+          sudo chroot rootfs systemctl enable provisioning.service
+          sudo chroot rootfs systemctl set-default multi-user.target
+
+      - name: Remove build junk and shrink image
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            apt-get purge -y \
+              gcc \
+              gcc-14 \
+              cpp \
+              cpp-14 \
+              exim4-base \
+              exim4-config \
+              exim4-daemon-light \
+              make \
+              fakeroot \
+              manpages-dev \
+              bsd-mailx || true
+
+            apt-get autoremove -y
+            apt-get clean
+
+            rm -rf /var/lib/apt/lists/*
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/man/*
+            rm -rf /usr/share/info/*
+            rm -rf /tmp/*
+          "
+
+      - name: Verify installed tools
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            echo '=== KERNEL ==='
+            ls -l /lib/modules
+            echo
+
+            echo '=== NETWORK MODULES ==='
+            find /lib/modules/${KERNEL_VERSION} -type f \
+              | grep -E 'e1000|e1000e|vmxnet3|virtio_net|r8169|tg3' \
+              || true
+            echo
+
+            echo '=== TOOL CHECK ==='
+
+            for x in \
+              ip \
+              curl \
+              wget \
+              sshd \
+              tmux \
+              vim \
+              lspci \
+              dmidecode \
+              nvme \
+              smartctl \
+              modprobe \
+              lsmod \
+              ethtool \
+              minicom \
+              sz \
+              rz \
+              kermit
+            do
+              echo
+              echo \"=== \$x ===\"
+              which \$x || true
+            done
+          "
+
+      - name: Unmount chroot filesystems
+        run: |
+          sudo umount rootfs/dev/pts || true
+          sudo umount rootfs/dev || true
+          sudo umount rootfs/proc || true
+          sudo umount rootfs/sys || true
+
+      - name: Copy rootfs into initrd tree
+        run: |
+          sudo rsync -aHAX \
+            --exclude=/proc/* \
+            --exclude=/sys/* \
+            --exclude=/dev/* \
+            --exclude=/run/* \
+            --exclude=/tmp/* \
+            rootfs/ initrd-tree/
+
+      - name: Install bootstrap init
+        run: |
+          cat << 'EOF' | sudo tee initrd-tree/init
+          #!/bin/sh
+
+          mount -t devtmpfs devtmpfs /dev
+          mount -t proc proc /proc
+          mount -t sysfs sysfs /sys
+          mount -t tmpfs tmpfs /run
+
+          mkdir -p /run/lock
+          mkdir -p /var/run
+
+          exec /lib/systemd/systemd
+          EOF
+
+          sudo chmod +x initrd-tree/init
+
+      - name: Install MOTD and shell config
+        run: |
+          sudo cp initramfs/motd initrd-tree/etc/motd || true
+          sudo cp initramfs/bashrc initrd-tree/root/.bashrc || true
+
+      - name: Copy collector and overlay
+        run: |
+          sudo mkdir -p initrd-tree/collector
+          sudo mkdir -p initrd-tree/overlay
+
+          sudo cp -r collector/* initrd-tree/collector/ || true
+          sudo cp -r overlay/* initrd-tree/overlay/ || true
+
+      - name: Create runtime directories
+        run: |
+          sudo mkdir -p initrd-tree/run
+          sudo mkdir -p initrd-tree/run/sshd
+          sudo mkdir -p initrd-tree/var/run/sshd
+          sudo mkdir -p initrd-tree/tmp
+          sudo mkdir -p initrd-tree/root
+
+      - name: Create device nodes
+        run: |
+          sudo mkdir -p initrd-tree/dev
+
+          sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
+          sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
+          sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
+          sudo mknod -m 666 initrd-tree/dev/ttyS0 c 4 64 || true
+
+      - name: Build final initramfs
+        run: |
+          cd initrd-tree
+
+          sudo find . -print0 \
+            | sudo cpio --null -ov --format=newc \
+            | gzip -9 \
+            > ../initramfs-amd64.cpio.gz
+
+      - name: Upload initramfs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: initramfs-amd64
+          path: initramfs-amd64.cpio.gz
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: provisioning-runtime
+          files: initramfs-amd64.cpio.gz
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
