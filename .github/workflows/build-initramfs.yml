@@ -1,4 +1,3 @@
-```yaml
 name: Build Provisioning Runtime
 
 on:
@@ -299,4 +298,3 @@ jobs:
         with:
           name: provisioning-runtime
           path: filesystem.squashfs
-```
