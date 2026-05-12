@@ -17,17 +17,15 @@ jobs:
       KERNEL_DEB: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
 
     steps:
-      ######################################################################
-      # Checkout
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Checkout repository
+      # ------------------------------------------------------------
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      ######################################################################
-      # Build dependencies
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Install host-side build dependencies
+      # ------------------------------------------------------------
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -44,19 +42,17 @@ jobs:
             linux-base \
             initramfs-tools
 
-      ######################################################################
-      # Working directories
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Create working directories
+      # ------------------------------------------------------------
       - name: Create working directories
         run: |
           mkdir -p rootfs
           mkdir -p initrd-tree
 
-      ######################################################################
-      # Bootstrap Debian
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Build minimal Debian root filesystem
+      # ------------------------------------------------------------
       - name: Build Debian rootfs
         run: |
           sudo debootstrap \
@@ -66,10 +62,9 @@ jobs:
             rootfs \
             ${DEBIAN_MIRROR}
 
-      ######################################################################
-      # Mount pseudo filesystems for chroot
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Mount required pseudo-filesystems for chroot operation
+      # ------------------------------------------------------------
       - name: Mount chroot filesystems
         run: |
           sudo mount --bind /dev rootfs/dev
@@ -77,10 +72,9 @@ jobs:
           sudo mount --bind /sys rootfs/sys
           sudo mount --bind /dev/pts rootfs/dev/pts
 
-      ######################################################################
-      # Configure apt
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Configure apt repositories inside chroot
+      # ------------------------------------------------------------
       - name: Configure apt sources
         run: |
           cat << EOF | sudo tee rootfs/etc/apt/sources.list
@@ -89,10 +83,9 @@ jobs:
           deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
           EOF
 
-      ######################################################################
-      # Download exact kernel package
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Download exact kernel package version
+      # ------------------------------------------------------------
       - name: Download exact matching kernel package
         run: |
           rm -f ${KERNEL_DEB}
@@ -106,10 +99,9 @@ jobs:
           sha256sum ${KERNEL_DEB}
           dpkg-deb --info ${KERNEL_DEB}
 
-      ######################################################################
-      # Install runtime packages
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Install provisioning runtime packages
+      # ------------------------------------------------------------
       - name: Install provisioning packages
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -168,7 +160,6 @@ jobs:
               firmware-linux-free \
               firmware-realtek \
               firmware-misc-nonfree \
-              wireless-regdb \
               isc-dhcp-client \
               net-tools \
               telnet \
@@ -178,10 +169,9 @@ jobs:
             apt-get clean
           "
 
-      ######################################################################
-      # Install kernel
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Install exact matching kernel
+      # ------------------------------------------------------------
       - name: Install exact matching kernel package
         run: |
           sudo cp ${KERNEL_DEB} rootfs/root/
@@ -190,10 +180,9 @@ jobs:
             dpkg -i /root/${KERNEL_DEB}
           "
 
-      ######################################################################
-      # Generate module dependency database
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Generate kernel module dependency database
+      # ------------------------------------------------------------
       - name: Generate module dependency database
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -210,10 +199,9 @@ jobs:
               || true
           "
 
-      ######################################################################
-      # Verify firmware
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Verify firmware and driver presence
+      # ------------------------------------------------------------
       - name: Verify firmware and modules
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -230,10 +218,9 @@ jobs:
               || true
           "
 
-      ######################################################################
-      # Keyboard configuration
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Configure keyboard layout
+      # ------------------------------------------------------------
       - name: Configure keyboard
         run: |
           cat << EOF | sudo tee rootfs/etc/default/keyboard
@@ -246,39 +233,35 @@ jobs:
 
           sudo chroot rootfs /usr/bin/setupcon --force || true
 
-      ######################################################################
-      # Networking
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Configure systemd-networkd DHCP networking
+      # ------------------------------------------------------------
       - name: Configure networking
         run: |
           sudo mkdir -p rootfs/etc/systemd/network
 
           cat << EOF | sudo tee rootfs/etc/systemd/network/20-wired.network
           [Match]
-          Name=eth*
+          Name=en* eth*
 
           [Network]
           DHCP=yes
-          IPv6AcceptRA=yes
           EOF
 
           sudo ln -sf \
             /run/systemd/resolve/stub-resolv.conf \
             rootfs/etc/resolv.conf
 
-      ######################################################################
-      # Root account
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Configure root password
+      # ------------------------------------------------------------
       - name: Configure root account
         run: |
           echo 'root:root' | sudo chroot rootfs chpasswd
 
-      ######################################################################
-      # SSH configuration
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Permit root SSH login
+      # ------------------------------------------------------------
       - name: Enable SSH root login
         run: |
           sudo sed -i \
@@ -289,10 +272,9 @@ jobs:
             's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
             rootfs/etc/ssh/sshd_config
 
-      ######################################################################
-      # Console autologin
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Configure automatic console login
+      # ------------------------------------------------------------
       - name: Configure automatic root login
         run: |
           sudo mkdir -p \
@@ -315,72 +297,46 @@ jobs:
           ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,38400,9600 %I \$TERM
           EOF
 
-      ######################################################################
-      # Hardware inventory collector
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Install hardware inventory collector
+      # ------------------------------------------------------------
       - name: Install hardware inventory collector
         run: |
           cat << 'EOF' | sudo tee rootfs/usr/local/bin/hwcollect.sh
           #!/bin/bash
 
-          #
-          # Hardware inventory collector
-          #
-          # Collects:
-          # - hostname
-          # - kernel version
-          # - network interfaces
-          # - block devices
-          # - PCI devices
-          # - USB devices
-          # - DMI data
-          #
-          # Output:
-          #   /root/hardware.json
-          #
+          # Collect broad hardware and runtime inventory information.
+          # This environment is ephemeral and intended for provisioning,
+          # diagnostics and forensic collection.
 
-          set -e
+          set -euo pipefail
 
           OUT="/root/hardware.json"
-
-          # Store large outputs in temporary files.
-          # This avoids shell argument expansion failures.
-          TMPDIR="$(mktemp -d)"
-
-          ip -j addr > "${TMPDIR}/network.json"
-          lsblk -J > "${TMPDIR}/blockdevices.json"
-          lspci -mm > "${TMPDIR}/lspci.txt"
-          lsusb > "${TMPDIR}/lsusb.txt" || true
-          dmidecode > "${TMPDIR}/dmidecode.txt" 2>/dev/null || true
 
           jq -n \
             --arg hostname "$(hostname)" \
             --arg kernel "$(uname -a)" \
-            --slurpfile network "${TMPDIR}/network.json" \
-            --slurpfile blockdevices "${TMPDIR}/blockdevices.json" \
-            --rawfile lspci "${TMPDIR}/lspci.txt" \
-            --rawfile lsusb "${TMPDIR}/lsusb.txt" \
-            --rawfile dmidecode "${TMPDIR}/dmidecode.txt" \
+            --argjson network "$(ip -j addr)" \
+            --argjson blockdevices "$(lsblk -J)" \
+            --arg lspci "$(lspci -mm)" \
+            --arg lsusb "$(lsusb)" \
+            --arg dmidecode "$(dmidecode)" \
             '{
               hostname: $hostname,
               kernel: $kernel,
-              network: $network[0],
-              blockdevices: $blockdevices[0],
+              network: $network,
+              blockdevices: $blockdevices,
               lspci: $lspci,
               lsusb: $lsusb,
               dmidecode: $dmidecode
             }' > "${OUT}"
-
-          rm -rf "${TMPDIR}"
           EOF
 
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
 
-      ######################################################################
-      # Hardware inventory service
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Install hardware collection service
+      # ------------------------------------------------------------
       - name: Install hardware inventory service
         run: |
           cat << EOF | sudo tee rootfs/etc/systemd/system/hwcollect.service
@@ -396,10 +352,9 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-      ######################################################################
-      # Provisioning runtime service
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Install provisioning runtime service
+      # ------------------------------------------------------------
       - name: Install provisioning service
         run: |
           cat << 'EOF' | sudo tee rootfs/etc/systemd/system/provisioning.service
@@ -412,7 +367,7 @@ jobs:
           Type=simple
 
           # Collector runtime entrypoint
-          ExecStart=/usr/bin/python3 /collector/collector.py
+          ExecStart=/collector/start.sh
 
           Restart=on-failure
           RestartSec=5
@@ -421,10 +376,9 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-      ######################################################################
-      # Enable services
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Enable required services
+      # ------------------------------------------------------------
       - name: Enable systemd services
         run: |
           sudo chroot rootfs systemctl enable ssh
@@ -436,10 +390,9 @@ jobs:
           sudo chroot rootfs systemctl enable provisioning.service
           sudo chroot rootfs systemctl set-default multi-user.target
 
-      ######################################################################
-      # Remove unnecessary packages/files
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Remove unnecessary packages and shrink image
+      # ------------------------------------------------------------
       - name: Remove build junk and shrink image
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -466,10 +419,9 @@ jobs:
             rm -rf /tmp/*
           "
 
-      ######################################################################
-      # Verify installed tools
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Validate expected tooling exists
+      # ------------------------------------------------------------
       - name: Verify installed tools
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -510,26 +462,9 @@ jobs:
             done
           "
 
-      ######################################################################
-      # IMPORTANT:
-      # Reset ownership before image generation.
-      #
-      # This fixes:
-      #   unsafe path transition / (owned by 1001)
-      #
-      # Caused by GitHub Actions UID leakage into the image tree.
-      ######################################################################
-
-      - name: Fix filesystem ownership
-        run: |
-          sudo chown -R root:root rootfs
-
-          sudo chmod 755 rootfs
-
-      ######################################################################
-      # Unmount chroot pseudo filesystems
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Unmount pseudo-filesystems before packaging
+      # ------------------------------------------------------------
       - name: Unmount chroot filesystems
         run: |
           sudo umount rootfs/dev/pts || true
@@ -537,10 +472,21 @@ jobs:
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      ######################################################################
-      # Copy rootfs into initrd tree
-      ######################################################################
+      # ------------------------------------------------------------
+      # Fix ownership of runtime root only
+      #
+      # IMPORTANT:
+      # Never recurse through proc/sys/dev because these are live
+      # kernel pseudo-filesystems from the GitHub Actions runner.
+      # ------------------------------------------------------------
+      - name: Reset rootfs ownership safely
+        run: |
+          sudo chown root:root rootfs
+          sudo chmod 755 rootfs
 
+      # ------------------------------------------------------------
+      # Copy root filesystem into initramfs staging tree
+      # ------------------------------------------------------------
       - name: Copy rootfs into initrd tree
         run: |
           sudo rsync -aHAX \
@@ -551,21 +497,13 @@ jobs:
             --exclude=/tmp/* \
             rootfs/ initrd-tree/
 
-      ######################################################################
-      # Install init process
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Install bootstrap init
+      # ------------------------------------------------------------
       - name: Install bootstrap init
         run: |
           cat << 'EOF' | sudo tee initrd-tree/init
           #!/bin/sh
-
-          #
-          # Minimal initramfs bootstrap.
-          #
-          # Mount required pseudo filesystems
-          # then hand off to systemd.
-          #
 
           mount -t devtmpfs devtmpfs /dev
           mount -t proc proc /proc
@@ -580,19 +518,17 @@ jobs:
 
           sudo chmod +x initrd-tree/init
 
-      ######################################################################
-      # MOTD / shell profile
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Optional MOTD and shell config
+      # ------------------------------------------------------------
       - name: Install MOTD and shell config
         run: |
           sudo cp initramfs/motd initrd-tree/etc/motd || true
           sudo cp initramfs/bashrc initrd-tree/root/.bashrc || true
 
-      ######################################################################
-      # Collector + overlay payload
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Copy collector payload and overlay content
+      # ------------------------------------------------------------
       - name: Copy collector and overlay
         run: |
           sudo mkdir -p initrd-tree/collector
@@ -601,10 +537,9 @@ jobs:
           sudo cp -r collector/* initrd-tree/collector/ || true
           sudo cp -r overlay/* initrd-tree/overlay/ || true
 
-      ######################################################################
-      # Runtime directories
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Create required runtime directories
+      # ------------------------------------------------------------
       - name: Create runtime directories
         run: |
           sudo mkdir -p initrd-tree/run
@@ -613,10 +548,9 @@ jobs:
           sudo mkdir -p initrd-tree/tmp
           sudo mkdir -p initrd-tree/root
 
-      ######################################################################
-      # Device nodes
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Create minimal device nodes
+      # ------------------------------------------------------------
       - name: Create device nodes
         run: |
           sudo mkdir -p initrd-tree/dev
@@ -626,10 +560,9 @@ jobs:
           sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
           sudo mknod -m 666 initrd-tree/dev/ttyS0 c 4 64 || true
 
-      ######################################################################
-      # Final initramfs
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Build compressed initramfs image
+      # ------------------------------------------------------------
       - name: Build final initramfs
         run: |
           cd initrd-tree
@@ -639,20 +572,18 @@ jobs:
             | gzip -9 \
             > ../initramfs-amd64.cpio.gz
 
-      ######################################################################
-      # Upload artifact
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Upload build artifact
+      # ------------------------------------------------------------
       - name: Upload initramfs artifact
         uses: actions/upload-artifact@v4
         with:
           name: initramfs-amd64
           path: initramfs-amd64.cpio.gz
 
-      ######################################################################
-      # GitHub Release
-      ######################################################################
-
+      # ------------------------------------------------------------
+      # Publish GitHub release artifact
+      # ------------------------------------------------------------
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
