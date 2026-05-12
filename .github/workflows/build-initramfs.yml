@@ -3,22 +3,36 @@ name: Build Provisioning Runtime
 on:
   workflow_dispatch:
 
-env:
-  DEBIAN_RELEASE: trixie
-  DEBIAN_MIRROR: http://deb.debian.org/debian
-  KERNEL_VERSION: 6.12.73+deb13-amd64
-  KERNEL_DEB: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
-
-  SMB_DOMAIN: jukebox.internal
-  SMB_USERNAME: Administrator
-  SMB_SHARE: DeployTools
-  SMB_MOUNT: /mnt/deploytools
+permissions:
+  contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  initramfs:
+    runs-on: ubuntu-24.04
+
+    env:
+      DEBIAN_RELEASE: trixie
+      DEBIAN_MIRROR: http://deb.debian.org/debian
+      KERNEL_VERSION: 6.12.73+deb13-amd64
+      KERNEL_DEB: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+
+      SMB_DOMAIN: jukebox.internal
+      SMB_USERNAME: Administrator
+      SMB_SHARE: DeployTools
+      SMB_MOUNT: /mnt/deploytools
 
     steps:
+
+      ######################################################################
+      # Checkout repository
+      ######################################################################
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      ######################################################################
+      # Install build dependencies
+      ######################################################################
 
       - name: Install build dependencies
         run: |
@@ -26,228 +40,446 @@ jobs:
 
           sudo apt-get install -y \
             debootstrap \
-            squashfs-tools \
-            xorriso \
-            grub-pc-bin \
-            grub-efi-amd64-bin \
-            mtools \
-            dosfstools \
-            wget \
+            cpio \
+            gzip \
+            xz-utils \
+            zstd \
             curl \
-            jq \
-            iproute2 \
-            net-tools
+            wget \
+            rsync \
+            dpkg \
+            linux-base \
+            initramfs-tools
 
-      - name: Create root filesystem
+      ######################################################################
+      # Create working directories
+      ######################################################################
+
+      - name: Create working directories
+        run: |
+          mkdir -p rootfs
+          mkdir -p initrd-tree
+
+      ######################################################################
+      # Bootstrap Debian rootfs
+      ######################################################################
+
+      - name: Build Debian rootfs
         run: |
           sudo debootstrap \
             --arch=amd64 \
+            --variant=minbase \
             ${DEBIAN_RELEASE} \
             rootfs \
             ${DEBIAN_MIRROR}
 
-      - name: Configure APT sources
+      ######################################################################
+      # Mount chroot pseudo filesystems
+      ######################################################################
+
+      - name: Mount chroot filesystems
         run: |
-          cat <<EOF | sudo tee rootfs/etc/apt/sources.list
-          deb http://deb.debian.org/debian ${DEBIAN_RELEASE} main contrib non-free non-free-firmware
-          deb http://deb.debian.org/debian-security ${DEBIAN_RELEASE}-security main contrib non-free non-free-firmware
-          deb http://deb.debian.org/debian ${DEBIAN_RELEASE}-updates main contrib non-free non-free-firmware
+          sudo mount --bind /dev rootfs/dev
+          sudo mount --bind /proc rootfs/proc
+          sudo mount --bind /sys rootfs/sys
+          sudo mount --bind /dev/pts rootfs/dev/pts
+
+      ######################################################################
+      # Configure apt repositories
+      ######################################################################
+
+      - name: Configure apt sources
+        run: |
+          cat << EOF | sudo tee rootfs/etc/apt/sources.list
+          deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
           EOF
 
-      - name: Install runtime packages
-        run: |
-          sudo chroot rootfs apt-get update
+      ######################################################################
+      # Download exact kernel package
+      ######################################################################
 
-          sudo chroot rootfs apt-get install -y \
-            systemd \
-            systemd-sysv \
-            dbus \
-            kmod \
-            udev \
-            iproute2 \
-            iputils-ping \
-            openssh-server \
-            openssh-client \
-            curl \
-            wget \
-            jq \
-            python3 \
-            python3-requests \
-            cifs-utils \
-            smbclient \
-            pciutils \
-            usbutils \
-            lshw \
-            dmidecode \
-            lsblk \
-            tmux \
-            vim-tiny \
-            less \
-            procps \
-            net-tools \
-            dnsutils \
-            locales \
-            ca-certificates \
-            initramfs-tools \
-            linux-image-amd64
+      - name: Download kernel package
+        run: |
+          rm -f ${KERNEL_DEB}
+          rm -f ${KERNEL_DEB}.1
+
+          wget -O ${KERNEL_DEB} \
+            http://ftp.uk.debian.org/debian/pool/main/l/linux-signed-amd64/${KERNEL_DEB}
+
+          ls -lh ${KERNEL_DEB}
+          sha256sum ${KERNEL_DEB}
+
+      ######################################################################
+      # Install runtime packages
+      ######################################################################
+
+      - name: Install provisioning packages
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+
+            apt-get install -y --no-install-recommends \
+              linux-base \
+              initramfs-tools \
+              systemd \
+              systemd-sysv \
+              dbus \
+              dbus-broker \
+              libpam-systemd \
+              udev \
+              kmod \
+              util-linux \
+              mount \
+              login \
+              passwd \
+              bash \
+              iproute2 \
+              iputils-ping \
+              isc-dhcp-client \
+              ethtool \
+              net-tools \
+              curl \
+              wget \
+              jq \
+              ca-certificates \
+              openssh-server \
+              openssh-client \
+              tmux \
+              vim-tiny \
+              less \
+              procps \
+              dnsutils \
+              telnet \
+              nmap \
+              grc \
+              tar \
+              gzip \
+              bzip2 \
+              xz-utils \
+              pciutils \
+              usbutils \
+              dmidecode \
+              lshw \
+              smartmontools \
+              nvme-cli \
+              mdadm \
+              ipmitool \
+              python3 \
+              python3-requests \
+              cifs-utils \
+              smbclient \
+              kbd \
+              console-setup \
+              keyboard-configuration \
+              console-data \
+              acpid \
+              minicom \
+              lrzsz \
+              ckermit \
+              systemd-resolved \
+              locales \
+              firmware-linux-free \
+              firmware-realtek \
+              firmware-misc-nonfree
+
+            apt-get clean
+          "
+
+      ######################################################################
+      # Configure locale
+      ######################################################################
 
       - name: Configure locale
         run: |
-          echo "en_US.UTF-8 UTF-8" | sudo tee -a rootfs/etc/locale.gen
+          sudo chroot rootfs /bin/bash -c "
+            echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
+            locale-gen
+            update-locale LANG=en_US.UTF-8
+          "
 
-          sudo chroot rootfs locale-gen
-          sudo chroot rootfs update-locale LANG=en_US.UTF-8
+      ######################################################################
+      # Install kernel
+      ######################################################################
 
-      - name: Configure hostname
+      - name: Install kernel package
         run: |
-          echo "provisioning-runtime" | sudo tee rootfs/etc/hostname
+          sudo cp ${KERNEL_DEB} rootfs/root/
 
-          cat <<EOF | sudo tee rootfs/etc/hosts
-          127.0.0.1 localhost
-          127.0.1.1 provisioning-runtime
+          sudo chroot rootfs /bin/bash -c "
+            dpkg -i /root/${KERNEL_DEB}
+          "
+
+      ######################################################################
+      # Generate module database
+      ######################################################################
+
+      - name: Generate module dependency database
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            depmod -a ${KERNEL_VERSION}
+          "
+
+      ######################################################################
+      # Configure keyboard
+      ######################################################################
+
+      - name: Configure keyboard
+        run: |
+          cat << EOF | sudo tee rootfs/etc/default/keyboard
+          XKBMODEL=\"pc105\"
+          XKBLAYOUT=\"gb\"
+          XKBVARIANT=\"\"
+          XKBOPTIONS=\"\"
+          BACKSPACE=\"guess\"
           EOF
 
-      - name: Configure SSH
+      ######################################################################
+      # Configure networking
+      ######################################################################
+
+      - name: Configure networking
         run: |
-          sudo mkdir -p rootfs/etc/ssh
-
-          sudo chroot rootfs systemctl enable ssh
-
-          cat <<EOF | sudo tee -a rootfs/etc/ssh/sshd_config
-          PermitRootLogin yes
-          PasswordAuthentication yes
-          UseDNS no
-          EOF
-
-          echo "root:root" | sudo chroot rootfs chpasswd
-
-      - name: Enable networking
-        run: |
-          sudo chroot rootfs systemctl enable systemd-networkd
-          sudo chroot rootfs systemctl enable systemd-resolved
-
           sudo mkdir -p rootfs/etc/systemd/network
 
-          cat <<EOF | sudo tee rootfs/etc/systemd/network/20-wired.network
+          cat << EOF | sudo tee rootfs/etc/systemd/network/20-wired.network
           [Match]
-          Name=e*
+          Name=eth*
 
           [Network]
           DHCP=yes
-          IPv6AcceptRA=yes
           EOF
 
-      - name: Create SMB mount helper
-        run: |
-          sudo mkdir -p rootfs/usr/local/bin
+          sudo ln -sf \
+            /run/systemd/resolve/stub-resolv.conf \
+            rootfs/etc/resolv.conf
 
-          cat <<'EOF' | sudo tee rootfs/usr/local/bin/mount-deploytools.sh
+      ######################################################################
+      # Configure root account
+      ######################################################################
+
+      - name: Configure root account
+        run: |
+          echo 'root:root' | sudo chroot rootfs chpasswd
+
+      ######################################################################
+      # Enable SSH root login
+      ######################################################################
+
+      - name: Configure SSH
+        run: |
+          sudo sed -i \
+            's/^#PermitRootLogin.*/PermitRootLogin yes/' \
+            rootfs/etc/ssh/sshd_config
+
+          sudo sed -i \
+            's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
+            rootfs/etc/ssh/sshd_config
+
+      ######################################################################
+      # Configure autologin
+      ######################################################################
+
+      - name: Configure automatic root login
+        run: |
+          sudo mkdir -p \
+            rootfs/etc/systemd/system/getty@tty1.service.d
+
+          cat << EOF | sudo tee \
+            rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
+          [Service]
+          ExecStart=
+          ExecStart=-/sbin/agetty --autologin root --noclear %I \$TERM
+          EOF
+
+      ######################################################################
+      # Install hardware collector
+      ######################################################################
+
+      - name: Install hardware inventory collector
+        run: |
+          cat << 'EOF' | sudo tee rootfs/usr/local/bin/hwcollect.sh
           #!/bin/bash
 
           set -euo pipefail
 
-          DOMAIN="${SMB_DOMAIN:-jukebox.internal}"
-          USERNAME="${SMB_USERNAME:-Administrator}"
-          SHARE="${SMB_SHARE:-DeployTools}"
-          MOUNTPOINT="${SMB_MOUNT:-/mnt/deploytools}"
-
-          ETH0_IP="$(ip -4 addr show eth0 | awk '/inet / {print $2}' | cut -d/ -f1)"
-          SUBNET_BASE="$(echo "${ETH0_IP}" | awk -F. '{print $1"."$2"."$3}')"
-
-          SERVER="${SUBNET_BASE}.10"
-
-          echo
-          echo "=================================================="
-          echo "DEPLOYTOOLS SMB MOUNT"
-          echo "=================================================="
-          echo
-          echo "[*] eth0 IP       : ${ETH0_IP}"
-          echo "[*] SMB Server    : ${SERVER}"
-          echo "[*] SMB Share     : ${SHARE}"
-          echo
-
-          ping -c1 "${SERVER}" >/dev/null
-
-          mkdir -p "${MOUNTPOINT}"
-
-          echo
-          echo "[*] Password required for ${DOMAIN}\\${USERNAME}"
-          echo
-
-          mount -t cifs "//${SERVER}/${SHARE}" "${MOUNTPOINT}" \
-            -o username="${USERNAME}",domain="${DOMAIN}",vers=3.1.1,seal,rw
-
-          echo
-          echo "[*] Verifying mount..."
-          echo
-
-          mountpoint -q "${MOUNTPOINT}"
-
-          df -h "${MOUNTPOINT}"
-
-          mkdir -p "${MOUNTPOINT}/inventory"
-          mkdir -p "${MOUNTPOINT}/logs"
-
-          echo
-          echo "[+] DeployTools mounted successfully"
-          EOF
-
-          sudo chmod +x rootfs/usr/local/bin/mount-deploytools.sh
-
-      - name: Create hardware collector
-        run: |
-          cat <<'EOF' | sudo tee rootfs/usr/local/bin/hwcollect.sh
-          #!/bin/bash
-
-          set -euo pipefail
-
+          OUTDIR="/root/inventory"
           TMPDIR="/tmp/hwcollect"
+
+          mkdir -p "${OUTDIR}"
           mkdir -p "${TMPDIR}"
 
-          ETH0_MAC="$(cat /sys/class/net/eth0/address | tr ':' '-')"
+          #
+          # Determine primary MAC from eth0
+          #
 
-          OUT_LOCAL="/root/${ETH0_MAC}.json"
-          OUT_REMOTE="/mnt/deploytools/inventory/${ETH0_MAC}.json"
+          MAC="$(cat /sys/class/net/eth0/address | tr ':' '-')"
 
-          echo "[*] Collecting inventory..."
+          JSON_OUT="${OUTDIR}/${MAC}.json"
+          LOG_OUT="${OUTDIR}/${MAC}.log"
 
+          exec > >(tee -a "${LOG_OUT}") 2>&1
+
+          echo "[*] Starting hardware collection"
+
+          echo "[*] Collecting network data..."
           ip -j addr > "${TMPDIR}/network.json"
-          lsblk -J > "${TMPDIR}/block.json"
-          lspci -mm > "${TMPDIR}/pci.txt"
-          lsusb > "${TMPDIR}/usb.txt"
-          dmidecode > "${TMPDIR}/dmi.txt"
+
+          echo "[*] Collecting block device data..."
+          lsblk -J > "${TMPDIR}/blockdevices.json"
+
+          echo "[*] Collecting PCI inventory..."
+          lspci -mm > "${TMPDIR}/lspci.txt" || true
+
+          echo "[*] Collecting USB inventory..."
+          lsusb > "${TMPDIR}/lsusb.txt" || true
+
+          echo "[*] Collecting DMI inventory..."
+          dmidecode > "${TMPDIR}/dmidecode.txt" || true
+
+          echo "[*] Building JSON output..."
 
           jq -n \
             --arg hostname "$(hostname)" \
             --arg kernel "$(uname -a)" \
-            --arg eth0_mac "${ETH0_MAC}" \
+            --arg mac "${MAC}" \
             --slurpfile network "${TMPDIR}/network.json" \
-            --slurpfile block "${TMPDIR}/block.json" \
+            --slurpfile blockdevices "${TMPDIR}/blockdevices.json" \
+            --rawfile lspci "${TMPDIR}/lspci.txt" \
+            --rawfile lsusb "${TMPDIR}/lsusb.txt" \
+            --rawfile dmidecode "${TMPDIR}/dmidecode.txt" \
             '{
               hostname: $hostname,
               kernel: $kernel,
-              eth0_mac: $eth0_mac,
-              network: $network,
-              block: $block
-            }' > "${OUT_LOCAL}.tmp"
+              primary_mac: $mac,
+              network: $network[0],
+              blockdevices: $blockdevices[0],
+              lspci: $lspci,
+              lsusb: $lsusb,
+              dmidecode: $dmidecode
+            }' > "${JSON_OUT}"
 
-          mv "${OUT_LOCAL}.tmp" "${OUT_LOCAL}"
+          chmod 600 "${JSON_OUT}"
+          chmod 600 "${LOG_OUT}"
 
-          echo "[+] Local inventory: ${OUT_LOCAL}"
+          echo "[+] Hardware inventory written to ${JSON_OUT}"
 
-          if mountpoint -q /mnt/deploytools; then
-            cp "${OUT_LOCAL}" "${OUT_REMOTE}.tmp"
-            mv "${OUT_REMOTE}.tmp" "${OUT_REMOTE}"
+          #
+          # Detect deployment server
+          #
 
-            echo "[+] Uploaded inventory: ${OUT_REMOTE}"
+          ETH0_IP="$(ip -4 addr show eth0 \
+            | awk '/inet / {print $2}' \
+            | cut -d/ -f1 \
+            | head -n1)"
+
+          SUBNET="$(echo "${ETH0_IP}" | awk -F. '{print $1"."$2"."$3}')"
+
+          DEPLOY_HOST="${SUBNET}.10"
+
+          echo "[*] Deployment server: ${DEPLOY_HOST}"
+
+          mkdir -p "__SMB_MOUNT__"
+
+          #
+          # Probe SMB
+          #
+
+          if ping -c1 -W1 "${DEPLOY_HOST}" >/dev/null 2>&1; then
+
+            echo "[+] Deployment host reachable"
+
+            if smbclient -L "//${DEPLOY_HOST}" -N 2>/dev/null \
+              | grep -q "__SMB_SHARE__"; then
+
+              echo "[+] DeployTools share detected"
+
+              echo
+              echo "=================================================="
+              echo "SMB AUTHENTICATION REQUIRED"
+              echo "=================================================="
+
+              read -p "Domain username [__SMB_DOMAIN__\\__SMB_USERNAME__]: " USERNAME
+
+              if [ -z "${USERNAME}" ]; then
+                USERNAME="__SMB_DOMAIN__\\__SMB_USERNAME__"
+              fi
+
+              read -s -p "Password: " PASSWORD
+              echo
+
+              cat > /tmp/creds.$$ << CREDS
+          username=${USERNAME}
+          password=${PASSWORD}
+          domain=__SMB_DOMAIN__
+          CREDS
+
+              chmod 600 /tmp/creds.$$
+
+              if mount -t cifs \
+                "//${DEPLOY_HOST}/__SMB_SHARE__" \
+                "__SMB_MOUNT__" \
+                -o "credentials=/tmp/creds.$$,vers=3.0,iocharset=utf8"; then
+
+                echo "[+] SMB mount successful"
+
+                if mount | grep -q "__SMB_MOUNT__"; then
+
+                  echo "[+] SMB mount verified"
+
+                  mkdir -p "__SMB_MOUNT__/inventory"
+                  mkdir -p "__SMB_MOUNT__/logs"
+
+                  cp -f "${JSON_OUT}" "__SMB_MOUNT__/inventory/"
+                  cp -f "${LOG_OUT}" "__SMB_MOUNT__/logs/"
+
+                  sync
+
+                  echo "[+] Files copied to DeployTools share"
+                fi
+              else
+                echo "[-] SMB mount failed"
+              fi
+
+              shred -u /tmp/creds.$$ || rm -f /tmp/creds.$$
+            else
+              echo "[-] DeployTools share not found"
+            fi
+          else
+            echo "[-] Deployment server unreachable"
           fi
+
+          echo "[+] Hardware collection completed"
           EOF
+
+          sudo sed -i \
+            "s|__SMB_DOMAIN__|${SMB_DOMAIN}|g" \
+            rootfs/usr/local/bin/hwcollect.sh
+
+          sudo sed -i \
+            "s|__SMB_USERNAME__|${SMB_USERNAME}|g" \
+            rootfs/usr/local/bin/hwcollect.sh
+
+          sudo sed -i \
+            "s|__SMB_SHARE__|${SMB_SHARE}|g" \
+            rootfs/usr/local/bin/hwcollect.sh
+
+          sudo sed -i \
+            "s|__SMB_MOUNT__|${SMB_MOUNT}|g" \
+            rootfs/usr/local/bin/hwcollect.sh
 
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
 
-      - name: Create systemd services
+      ######################################################################
+      # Hardware inventory service
+      ######################################################################
+
+      - name: Install hardware inventory service
         run: |
-          cat <<EOF | sudo tee rootfs/etc/systemd/system/hwcollect.service
+          cat << EOF | sudo tee rootfs/etc/systemd/system/hwcollect.service
           [Unit]
           Description=Hardware Inventory Collection
           After=network-online.target
@@ -255,46 +487,244 @@ jobs:
 
           [Service]
           Type=oneshot
+          StandardInput=tty
+          StandardOutput=journal+console
           ExecStart=/usr/local/bin/hwcollect.sh
 
           [Install]
           WantedBy=multi-user.target
           EOF
 
-          sudo chroot rootfs systemctl enable hwcollect.service
+      ######################################################################
+      # Provisioning service
+      ######################################################################
 
-      - name: Enable root autologin
+      - name: Install provisioning service
         run: |
-          sudo mkdir -p rootfs/etc/systemd/system/getty@tty1.service.d
+          cat << 'EOF' | sudo tee rootfs/etc/systemd/system/provisioning.service
+          [Unit]
+          Description=Provisioning Runtime
+          After=network-online.target ssh.service
+          Wants=network-online.target
 
-          cat <<EOF | sudo tee rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
           [Service]
-          ExecStart=
-          ExecStart=-/sbin/agetty --autologin root --noclear %I \$TERM
+          Type=simple
+          WorkingDirectory=/collector
+
+          #
+          # IMPORTANT:
+          # Bind to all interfaces, NOT a hardcoded IP.
+          #
+
+          Environment=PYTHONUNBUFFERED=1
+
+          ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0
+
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
           EOF
 
-      - name: Clean filesystem
-        run: |
-          sudo chroot rootfs apt-get clean
+      ######################################################################
+      # Enable services
+      ######################################################################
 
-          sudo rm -rf rootfs/tmp/*
-          sudo rm -rf rootfs/var/lib/apt/lists/*
-
-      - name: Fix ownership safely
+      - name: Enable services
         run: |
-          sudo chown -R root:root rootfs || true
+          sudo chroot rootfs systemctl enable ssh
+          sudo chroot rootfs systemctl enable systemd-networkd
+          sudo chroot rootfs systemctl enable systemd-resolved
+          sudo chroot rootfs systemctl enable getty@tty1.service
+          sudo chroot rootfs systemctl enable hwcollect.service
+          sudo chroot rootfs systemctl enable provisioning.service
+          sudo chroot rootfs systemctl set-default multi-user.target
+
+      ######################################################################
+      # Cleanup
+      ######################################################################
+
+      - name: Cleanup image
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            apt-get autoremove -y
+            apt-get clean
+
+            rm -rf /var/lib/apt/lists/*
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/man/*
+            rm -rf /usr/share/info/*
+            rm -rf /tmp/*
+          "
+
+      ######################################################################
+      # Normalize ownership
+      ######################################################################
+
+      - name: Normalize ownership
+        run: |
+          sudo chown root:root rootfs
           sudo chmod 755 rootfs
 
-      - name: Build initramfs
-        run: |
-          sudo chroot rootfs update-initramfs -u
+      ######################################################################
+      # Verify binaries
+      ######################################################################
 
-      - name: Build squashfs
+      - name: Verify installed tools
         run: |
-          sudo mksquashfs rootfs filesystem.squashfs -comp xz
+          sudo chroot rootfs /bin/bash -c "
+            echo '=== TOOL CHECK ==='
+
+            for x in \
+              ip \
+              curl \
+              wget \
+              sshd \
+              tmux \
+              vim \
+              vim.tiny \
+              lspci \
+              dmidecode \
+              nvme \
+              smartctl \
+              modprobe \
+              lsmod \
+              ethtool \
+              minicom \
+              sz \
+              rz \
+              kermit \
+              smbclient \
+              mount.cifs \
+              nmap \
+              grc
+            do
+              echo
+              echo \"=== \$x ===\"
+              command -v \$x || true
+            done
+          "
+
+      ######################################################################
+      # Unmount chroot filesystems
+      ######################################################################
+
+      - name: Unmount chroot filesystems
+        run: |
+          sudo umount rootfs/dev/pts || true
+          sudo umount rootfs/dev || true
+          sudo umount rootfs/proc || true
+          sudo umount rootfs/sys || true
+
+      ######################################################################
+      # Copy rootfs
+      ######################################################################
+
+      - name: Copy rootfs into initrd tree
+        run: |
+          sudo rsync -aHAX \
+            --numeric-ids \
+            --exclude=/proc/* \
+            --exclude=/sys/* \
+            --exclude=/dev/* \
+            --exclude=/run/* \
+            --exclude=/tmp/* \
+            rootfs/ initrd-tree/
+
+      ######################################################################
+      # Install bootstrap init
+      ######################################################################
+
+      - name: Install bootstrap init
+        run: |
+          cat << 'EOF' | sudo tee initrd-tree/init
+          #!/bin/sh
+
+          mount -t devtmpfs devtmpfs /dev
+          mount -t proc proc /proc
+          mount -t sysfs sysfs /sys
+          mount -t tmpfs tmpfs /run
+          mount -t tmpfs tmpfs /tmp
+
+          mkdir -p /run/lock
+          mkdir -p /var/run
+          mkdir -p /dev/pts
+
+          mount -t devpts devpts /dev/pts
+
+          exec /lib/systemd/systemd
+          EOF
+
+          sudo chmod +x initrd-tree/init
+
+      ######################################################################
+      # Copy collector and overlay
+      ######################################################################
+
+      - name: Copy collector and overlay
+        run: |
+          sudo mkdir -p initrd-tree/collector
+          sudo mkdir -p initrd-tree/overlay
+
+          sudo cp -r collector/* initrd-tree/collector/ || true
+          sudo cp -r overlay/* initrd-tree/overlay/ || true
+
+      ######################################################################
+      # Runtime directories
+      ######################################################################
+
+      - name: Create runtime directories
+        run: |
+          sudo mkdir -p initrd-tree/run
+          sudo mkdir -p initrd-tree/run/sshd
+          sudo mkdir -p initrd-tree/var/run/sshd
+          sudo mkdir -p initrd-tree/tmp
+          sudo mkdir -p initrd-tree/root
+
+      ######################################################################
+      # Device nodes
+      ######################################################################
+
+      - name: Create device nodes
+        run: |
+          sudo mkdir -p initrd-tree/dev
+
+          sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
+          sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
+          sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
+
+      ######################################################################
+      # Build initramfs
+      ######################################################################
+
+      - name: Build final initramfs
+        run: |
+          cd initrd-tree
+
+          sudo find . -print0 \
+            | sudo cpio --null -ov --format=newc \
+            | gzip -9 \
+            > ../initramfs-amd64.cpio.gz
+
+      ######################################################################
+      # Upload artifact
+      ######################################################################
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: provisioning-runtime
-          path: filesystem.squashfs
+          name: initramfs-amd64
+          path: initramfs-amd64.cpio.gz
+
+      ######################################################################
+      # Publish release
+      ######################################################################
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: provisioning-runtime
+          files: initramfs-amd64.cpio.gz
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
