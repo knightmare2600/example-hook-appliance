@@ -1,3 +1,4 @@
+```yaml
 name: Build Provisioning Runtime
 
 on:
@@ -86,12 +87,19 @@ jobs:
           mkdir -p initrd-tree
 
       ######################################################################
-      # Bootstrap Debian
+      # Bootstrap Debian rootfs
       ######################################################################
 
-      - name: Build Debian rootfs
+      - name: Bootstrap Debian rootfs
         run: |
+
+          #
+          # ARM64 requires foreign bootstrap + QEMU emulation
+          #
+
           if [ "${{ matrix.arch }}" = "arm64" ]; then
+
+            echo "[*] Performing ARM64 foreign bootstrap..."
 
             sudo debootstrap \
               --foreign \
@@ -101,14 +109,21 @@ jobs:
               rootfs \
               ${DEBIAN_MIRROR}
 
-            sudo cp /usr/bin/qemu-aarch64-static \
+            echo "[*] Installing qemu-aarch64-static..."
+
+            sudo cp \
+              /usr/bin/qemu-aarch64-static \
               rootfs/usr/bin/
+
+            echo "[*] Completing ARM64 second-stage bootstrap..."
 
             sudo chroot rootfs \
               /debootstrap/debootstrap \
               --second-stage
 
           else
+
+            echo "[*] Performing native AMD64 bootstrap..."
 
             sudo debootstrap \
               --arch=amd64 \
@@ -120,14 +135,16 @@ jobs:
           fi
 
       ######################################################################
-      # Enable ARM64 chroot support
+      # Verify bootstrap
       ######################################################################
 
-      - name: Install qemu static binary
-        if: matrix.arch == 'arm64'
+      - name: Verify bootstrap
         run: |
-          sudo cp /usr/bin/qemu-aarch64-static \
-            rootfs/usr/bin/
+          sudo chroot rootfs /bin/bash -c "
+            uname -m || true
+            dpkg --print-architecture
+            ls -l /bin/bash
+          "
 
       ######################################################################
       # Mount chroot filesystems
@@ -141,7 +158,7 @@ jobs:
           sudo mount --bind /dev/pts rootfs/dev/pts
 
       ######################################################################
-      # Apt sources
+      # Configure apt sources
       ######################################################################
 
       - name: Configure apt sources
@@ -238,14 +255,6 @@ jobs:
           de_DE.UTF-8 UTF-8
           EOF
 
-          #
-          # Ensure locale-gen exists
-          #
-
-          sudo chroot rootfs /bin/bash -c "
-            apt-get update
-            apt-get install -y locales localepurge
-          "
           sudo chroot rootfs /usr/sbin/locale-gen
 
       ######################################################################
@@ -271,8 +280,14 @@ jobs:
         run: |
           sudo cp ${{ matrix.kernel_deb }} rootfs/root/
 
-          sudo chroot rootfs dpkg -i \
-            /root/${{ matrix.kernel_deb }}
+          sudo chroot rootfs /bin/bash -c "
+
+            dpkg -i /root/${{ matrix.kernel_deb }} || true
+
+            apt-get update
+
+            apt-get install -fy
+          "
 
       ######################################################################
       # Generate depmod
@@ -468,7 +483,7 @@ jobs:
             rootfs/ initrd-tree/
 
       ######################################################################
-      # Bootstrap init
+      # Install bootstrap init
       ######################################################################
 
       - name: Install bootstrap init
@@ -492,7 +507,7 @@ jobs:
           sudo chmod +x initrd-tree/init
 
       ######################################################################
-      # Runtime directories
+      # Create runtime directories
       ######################################################################
 
       - name: Create runtime directories
@@ -504,7 +519,7 @@ jobs:
           sudo mkdir -p initrd-tree/run/sshd
 
       ######################################################################
-      # Device nodes
+      # Create device nodes
       ######################################################################
 
       - name: Create device nodes
@@ -555,3 +570,4 @@ jobs:
 
         env:
           GITHUB_TOKEN: ${{ github.token }}
+```
