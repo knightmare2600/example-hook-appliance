@@ -120,6 +120,16 @@ jobs:
           fi
 
       ######################################################################
+      # Enable ARM64 chroot support
+      ######################################################################
+
+      - name: Install qemu static binary
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo cp /usr/bin/qemu-aarch64-static \
+            rootfs/usr/bin/
+
+      ######################################################################
       # Mount chroot filesystems
       ######################################################################
 
@@ -228,7 +238,15 @@ jobs:
           de_DE.UTF-8 UTF-8
           EOF
 
-          sudo chroot rootfs locale-gen
+          #
+          # Ensure locale-gen exists
+          #
+
+          sudo chroot rootfs /bin/bash -c "
+            apt-get update
+            apt-get install -y locales localepurge
+          "
+          sudo chroot rootfs /usr/sbin/locale-gen
 
       ######################################################################
       # Configure localepurge
