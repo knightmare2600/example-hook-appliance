@@ -227,7 +227,8 @@ jobs:
               smbclient \
               firmware-linux-free \
               firmware-realtek \
-              firmware-misc-nonfree
+              firmware-misc-nonfree \
+              linux-base
 
             apt-get clean
           "
