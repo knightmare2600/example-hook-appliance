@@ -11,11 +11,8 @@ env:
 
 jobs:
 
-  ##########################################################################
-  # Multi-architecture build
-  ##########################################################################
-
   build:
+    name: Build ${{ matrix.arch }} initramfs
     runs-on: ubuntu-24.04
 
     strategy:
@@ -48,7 +45,7 @@ jobs:
       # Checkout
       ######################################################################
 
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       ######################################################################
@@ -80,25 +77,21 @@ jobs:
 
       - name: Create working directories
         run: |
-          rm -rf rootfs initrd-tree
+          sudo rm -rf rootfs initrd-tree
 
           mkdir -p rootfs
           mkdir -p initrd-tree
 
       ######################################################################
-      # Bootstrap Debian rootfs
+      # Bootstrap Debian
       ######################################################################
 
       - name: Bootstrap Debian rootfs
         run: |
 
-          #
-          # ARM64 requires foreign bootstrap + QEMU emulation
-          #
-
           if [ "${{ matrix.arch }}" = "arm64" ]; then
 
-            echo "[*] Performing ARM64 foreign bootstrap..."
+            echo "[*] ARM64 foreign bootstrap"
 
             sudo debootstrap \
               --foreign \
@@ -108,13 +101,8 @@ jobs:
               rootfs \
               ${DEBIAN_MIRROR}
 
-            echo "[*] Installing qemu-aarch64-static..."
-
-            sudo cp \
-              /usr/bin/qemu-aarch64-static \
+            sudo cp /usr/bin/qemu-aarch64-static \
               rootfs/usr/bin/
-
-            echo "[*] Completing ARM64 second-stage bootstrap..."
 
             sudo chroot rootfs \
               /debootstrap/debootstrap \
@@ -122,7 +110,7 @@ jobs:
 
           else
 
-            echo "[*] Performing native AMD64 bootstrap..."
+            echo "[*] Native AMD64 bootstrap"
 
             sudo debootstrap \
               --arch=amd64 \
@@ -140,8 +128,11 @@ jobs:
       - name: Verify bootstrap
         run: |
           sudo chroot rootfs /bin/bash -c "
-            uname -m || true
+            echo '=== ARCHITECTURE ==='
             dpkg --print-architecture
+
+            echo
+            echo '=== BASH ==='
             ls -l /bin/bash
           "
 
@@ -169,17 +160,17 @@ jobs:
           EOF
 
       ######################################################################
-      # Download kernel package
+      # Download kernel
       ######################################################################
 
       - name: Download kernel package
         run: |
-          rm -f ${{ matrix.kernel_deb }}
+          rm -f "${{ matrix.kernel_deb }}"
 
-          wget -O ${{ matrix.kernel_deb }} \
-            ${{ matrix.kernel_url }}
+          wget -O "${{ matrix.kernel_deb }}" \
+            "${{ matrix.kernel_url }}"
 
-          sha256sum ${{ matrix.kernel_deb }}
+          sha256sum "${{ matrix.kernel_deb }}"
 
       ######################################################################
       # Install runtime packages
@@ -194,7 +185,8 @@ jobs:
             apt-get update
 
             apt-get install -y --no-install-recommends \
-
+              locales \
+              localepurge \
               systemd \
               systemd-sysv \
               dbus \
@@ -233,8 +225,6 @@ jobs:
               python3-requests \
               cifs-utils \
               smbclient \
-              locales \
-              localepurge \
               firmware-linux-free \
               firmware-realtek \
               firmware-misc-nonfree
@@ -254,7 +244,9 @@ jobs:
           de_DE.UTF-8 UTF-8
           EOF
 
-          sudo chroot rootfs /usr/sbin/locale-gen
+          sudo chroot rootfs /bin/bash -c "
+            locale-gen
+          "
 
       ######################################################################
       # Configure localepurge
@@ -277,7 +269,8 @@ jobs:
 
       - name: Install kernel package
         run: |
-          sudo cp ${{ matrix.kernel_deb }} rootfs/root/
+          sudo cp "${{ matrix.kernel_deb }}" \
+            rootfs/root/
 
           sudo chroot rootfs /bin/bash -c "
 
@@ -289,13 +282,13 @@ jobs:
           "
 
       ######################################################################
-      # Generate depmod
+      # Generate module dependencies
       ######################################################################
 
       - name: Generate depmod
         run: |
           sudo chroot rootfs depmod -a \
-            ${{ matrix.kernel_version }}
+            "${{ matrix.kernel_version }}"
 
       ######################################################################
       # Remove duplicate boot kernel
@@ -351,7 +344,7 @@ jobs:
             rootfs/etc/ssh/sshd_config
 
       ######################################################################
-      # Configure tty autologin
+      # Configure autologin
       ######################################################################
 
       - name: Configure tty autologin
@@ -367,7 +360,7 @@ jobs:
           EOF
 
       ######################################################################
-      # Install hardware collector
+      # Install scripts
       ######################################################################
 
       - name: Install hardware collector
@@ -375,10 +368,6 @@ jobs:
           sudo install -m755 \
             scripts/hwcollect.sh \
             rootfs/usr/local/bin/hwcollect.sh
-
-      ######################################################################
-      # Install SMB uploader
-      ######################################################################
 
       - name: Install SMB uploader
         run: |
@@ -438,7 +427,7 @@ jobs:
           sudo chroot rootfs systemctl set-default multi-user.target
 
       ######################################################################
-      # Cleanup image
+      # Cleanup
       ######################################################################
 
       - name: Cleanup image
@@ -506,7 +495,7 @@ jobs:
           sudo chmod +x initrd-tree/init
 
       ######################################################################
-      # Create runtime directories
+      # Runtime directories
       ######################################################################
 
       - name: Create runtime directories
@@ -514,11 +503,11 @@ jobs:
           sudo mkdir -p initrd-tree/run
           sudo mkdir -p initrd-tree/tmp
           sudo mkdir -p initrd-tree/root
-          sudo mkdir -p initrd-tree/var/run/sshd
           sudo mkdir -p initrd-tree/run/sshd
+          sudo mkdir -p initrd-tree/var/run/sshd
 
       ######################################################################
-      # Create device nodes
+      # Device nodes
       ######################################################################
 
       - name: Create device nodes
@@ -548,8 +537,10 @@ jobs:
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
+
         with:
           name: initramfs-${{ matrix.arch }}
+
           path: |
             initramfs-${{ matrix.arch }}.cpio.gz
             ${{ matrix.kernel_deb }}
@@ -560,6 +551,7 @@ jobs:
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
+
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
 
