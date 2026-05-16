@@ -45,7 +45,7 @@ jobs:
         run: |
           sudo apt-get update
 
-          sudo apt-get install -y debootstrap qemu-user-static binfmt-support cpio gzip xz-utils zstd rsync wget curl dpkg initramfs-tools linux-base
+          sudo apt-get install -y debootstrap qemu-user-static binfmt-support cpio gzip xz-utils zstd rsync wget curl dpkg initramfs-tools linux-base locales
 
       ###################################################################### Working directories ######################################################################
       - name: Create working directories
@@ -59,12 +59,12 @@ jobs:
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             echo "[*] ARM64 foreign bootstrap"
-            sudo debootstrap --foreign --arch=arm64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
+            sudo debootstrap --foreign --arch=arm64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR} --include 
             sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
             sudo chroot rootfs /debootstrap/debootstrap --second-stage
           else
             echo "[*] Native AMD64 bootstrap"
-            sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
+            sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR} --include
           fi
 
       ###################################################################### Verify bootstrap ######################################################################
