@@ -1,0 +1,15 @@
+[Unit]
+Description=Upload inventory to SMB share
+After=hwcollect.service network-online.target
+Requires=hwcollect.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+StandardInput=tty
+StandardOutput=journal+console
+TimeoutStartSec=15min
+ExecStart=/usr/local/bin/smbupload.sh
+
+[Install]
+WantedBy=multi-user.target
