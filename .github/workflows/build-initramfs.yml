@@ -58,12 +58,12 @@ jobs:
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             echo "[*] ARM64 foreign bootstrap"
-            sudo debootstrap --arch=arm64 --include=locales --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR} --foreign 
+            sudo debootstrap --arch=arm64 --include=locales,kmod --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR} --foreign 
             sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
             sudo chroot rootfs /debootstrap/debootstrap --second-stage
           else
             echo "[*] Native AMD64 bootstrap"
-            sudo debootstrap --arch=amd64 --include=locales --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
+            sudo debootstrap --arch=amd64 --include=locales,kmod --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
           fi
 
       ###################################################################### Verify bootstrap ######################################################################
