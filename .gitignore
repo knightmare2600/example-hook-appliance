@@ -1,0 +1,9 @@
+rootfs/
+initrd-tree/
+firmware-debs/
+*.cpio.gz
+*.deb
+*.img
+*.squashfs
+*.log
+*.tmp
