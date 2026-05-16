@@ -1,0 +1,12 @@
+[Unit]
+Description=Hardware Inventory Collection
+After=network-online.target systemd-udev-settle.service
+Wants=network-online.target systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hwcollect.sh
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target
