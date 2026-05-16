@@ -20,7 +20,6 @@ jobs:
 
       matrix:
         include:
-
           - arch: amd64
             kernel_version: 6.12.73+deb13-amd64
             kernel_deb: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
@@ -35,111 +34,51 @@ jobs:
       DEBIAN_RELEASE: trixie
       DEBIAN_MIRROR: http://deb.debian.org/debian
 
-      SMB_DOMAIN: jukebox.internal
-      SMB_USERNAME: Administrator
-      SMB_SHARE: DeployTools
-
     steps:
 
-      ######################################################################
-      # Checkout
-      ######################################################################
-
+      ###################################################################### Checkout ######################################################################
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      ######################################################################
-      # Build dependencies
-      ######################################################################
-
+      ###################################################################### Build dependencies ######################################################################
       - name: Install build dependencies
         run: |
           sudo apt-get update
 
-          sudo apt-get install -y \
-            debootstrap \
-            qemu-user-static \
-            binfmt-support \
-            cpio \
-            gzip \
-            xz-utils \
-            zstd \
-            rsync \
-            wget \
-            curl \
-            dpkg \
-            initramfs-tools \
-            linux-base
+          sudo apt-get install -y debootstrap qemu-user-static binfmt-support cpio gzip xz-utils zstd rsync wget curl dpkg initramfs-tools linux-base
 
-      ######################################################################
-      # Working directories
-      ######################################################################
-
+      ###################################################################### Working directories ######################################################################
       - name: Create working directories
         run: |
           sudo rm -rf rootfs initrd-tree
-
           mkdir -p rootfs
           mkdir -p initrd-tree
 
-      ######################################################################
-      # Bootstrap Debian
-      ######################################################################
-
+      ###################################################################### Bootstrap Debian ######################################################################
       - name: Bootstrap Debian rootfs
         run: |
-
           if [ "${{ matrix.arch }}" = "arm64" ]; then
-
             echo "[*] ARM64 foreign bootstrap"
-
-            sudo debootstrap \
-              --foreign \
-              --arch=arm64 \
-              --variant=minbase \
-              ${DEBIAN_RELEASE} \
-              rootfs \
-              ${DEBIAN_MIRROR}
-
-            sudo cp /usr/bin/qemu-aarch64-static \
-              rootfs/usr/bin/
-
-            sudo chroot rootfs \
-              /debootstrap/debootstrap \
-              --second-stage
-
+            sudo debootstrap --foreign --arch=arm64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
+            sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
+            sudo chroot rootfs /debootstrap/debootstrap --second-stage
           else
-
             echo "[*] Native AMD64 bootstrap"
-
-            sudo debootstrap \
-              --arch=amd64 \
-              --variant=minbase \
-              ${DEBIAN_RELEASE} \
-              rootfs \
-              ${DEBIAN_MIRROR}
-
+            sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
           fi
 
-      ######################################################################
-      # Verify bootstrap
-      ######################################################################
-
+      ###################################################################### Verify bootstrap ######################################################################
       - name: Verify bootstrap
         run: |
           sudo chroot rootfs /bin/bash -c "
             echo '=== ARCHITECTURE ==='
             dpkg --print-architecture
-
             echo
             echo '=== BASH ==='
             ls -l /bin/bash
           "
 
-      ######################################################################
-      # Mount chroot filesystems
-      ######################################################################
-
+      ###################################################################### Mount chroot filesystems ######################################################################
       - name: Mount chroot filesystems
         run: |
           sudo mount --bind /dev rootfs/dev
@@ -147,308 +86,87 @@ jobs:
           sudo mount --bind /sys rootfs/sys
           sudo mount --bind /dev/pts rootfs/dev/pts
 
-      ######################################################################
-      # Configure apt sources
-      ######################################################################
-
-      - name: Configure apt sources
-        run: |
-          cat << EOF | sudo tee rootfs/etc/apt/sources.list
-          deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
-          deb http://deb.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
-          deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
-          EOF
-
-      ######################################################################
-      # Download kernel
-      ######################################################################
-
+      ###################################################################### Download kernel ######################################################################
       - name: Download kernel package
         run: |
           rm -f "${{ matrix.kernel_deb }}"
-
-          wget -O "${{ matrix.kernel_deb }}" \
-            "${{ matrix.kernel_url }}"
-
+          wget -O "${{ matrix.kernel_deb }}" "${{ matrix.kernel_url }}"
           sha256sum "${{ matrix.kernel_deb }}"
 
-      ######################################################################
-      # Install runtime packages
-      ######################################################################
-
+      ###################################################################### Install runtime packages ######################################################################
       - name: Install runtime packages
         run: |
+          sudo cp build/packages.txt rootfs/root/packages.txt
           sudo chroot rootfs /bin/bash -c "
-
             export DEBIAN_FRONTEND=noninteractive
-
             apt-get update
-
-            apt-get install -y --no-install-recommends \
-              locales \
-              localepurge \
-              systemd \
-              systemd-sysv \
-              dbus \
-              dbus-broker \
-              udev \
-              kmod \
-              util-linux \
-              mount \
-              login \
-              passwd \
-              bash \
-              procps \
-              less \
-              vim-tiny \
-              jq \
-              curl \
-              wget \
-              ca-certificates \
-              iproute2 \
-              iputils-ping \
-              isc-dhcp-client \
-              ethtool \
-              net-tools \
-              dnsutils \
-              openssh-server \
-              openssh-client \
-              pciutils \
-              usbutils \
-              dmidecode \
-              lshw \
-              smartmontools \
-              nvme-cli \
-              mdadm \
-              ipmitool \
-              python3 \
-              python3-requests \
-              cifs-utils \
-              smbclient \
-              firmware-linux-free \
-              firmware-realtek \
-              firmware-misc-nonfree \
-              linux-base
-
+            xargs -a /root/packages.txt apt-get install -y --no-install-recommends
             apt-get clean
           "
 
-      ######################################################################
-      # Configure locales
-      ######################################################################
-
-      - name: Configure locales
+      ###################################################################### Apply overlay ######################################################################
+      - name: Apply overlay
         run: |
-          cat << EOF | sudo tee rootfs/etc/locale.gen
-          en_GB.UTF-8 UTF-8
-          da_DK.UTF-8 UTF-8
-          de_DE.UTF-8 UTF-8
-          EOF
+          sudo rsync -a overlay/ rootfs/
 
-          sudo chroot rootfs /bin/bash -c "
-            locale-gen
-          "
-
-      ######################################################################
-      # Configure localepurge
-      ######################################################################
-
-      - name: Configure localepurge
+      ###################################################################### Fix overlay permissions ######################################################################
+      - name: Fix overlay permissions
         run: |
-          cat << EOF | sudo tee rootfs/etc/locale.nopurge
-          MANDELETE
-          DONTBOTHERNEWLOCALE
-          SHOWFREEDSPACE
-          en_GB.UTF-8
-          da_DK.UTF-8
-          de_DE.UTF-8
-          EOF
+          sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
+          sudo chmod +x rootfs/usr/local/bin/smbupload.sh
 
-      ######################################################################
-      # Install kernel package
-      ######################################################################
+      ###################################################################### Generate locales ######################################################################
+      - name: Generate locales
+        run: |
+          sudo chroot rootfs /bin/bash -c "locale-gen"
 
+      ###################################################################### Generate machine-id ######################################################################
+      - name: Generate machine-id
+        run: |
+          sudo systemd-machine-id-setup --root=rootfs
+
+      ###################################################################### Install kernel package ######################################################################
       - name: Install kernel package
         run: |
-          sudo cp "${{ matrix.kernel_deb }}" \
-            rootfs/root/
-
+          sudo cp "${{ matrix.kernel_deb }}" rootfs/root/
           sudo chroot rootfs /bin/bash -c "
-
+            export DEBIAN_FRONTEND=noninteractive
             dpkg -i /root/${{ matrix.kernel_deb }} || true
-
             apt-get update
-
             apt-get install -fy
           "
 
-      ######################################################################
-      # Generate module dependencies
-      ######################################################################
-
+      ###################################################################### Generate module dependencies ######################################################################
       - name: Generate depmod
         run: |
-          sudo chroot rootfs depmod -a \
-            "${{ matrix.kernel_version }}"
+          sudo chroot rootfs depmod -a "${{ matrix.kernel_version }}"
 
-      ######################################################################
-      # Remove duplicate boot kernel
-      ######################################################################
-
+      ###################################################################### Remove duplicate boot kernel ######################################################################
       - name: Remove embedded boot kernel
         run: |
           sudo rm -f rootfs/boot/vmlinuz-* || true
           sudo rm -f rootfs/boot/initrd.img-* || true
 
-      ######################################################################
-      # Configure networking
-      ######################################################################
-
-      - name: Configure networking
-        run: |
-          sudo mkdir -p rootfs/etc/systemd/network
-
-          cat << EOF | sudo tee \
-            rootfs/etc/systemd/network/20-wired.network
-          [Match]
-          Name=eth*
-
-          [Network]
-          DHCP=yes
-          EOF
-
-          cat << EOF | sudo tee rootfs/etc/resolv.conf
-          nameserver 1.1.1.1
-          nameserver 8.8.8.8
-          EOF
-
-      ######################################################################
-      # Configure root account
-      ######################################################################
-
-      - name: Configure root account
-        run: |
-          echo 'root:root' | sudo chroot rootfs chpasswd
-
-      ######################################################################
-      # Configure SSH
-      ######################################################################
-
-      - name: Configure SSH
-        run: |
-          sudo sed -i \
-            's/^#PermitRootLogin.*/PermitRootLogin yes/' \
-            rootfs/etc/ssh/sshd_config
-
-          sudo sed -i \
-            's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
-            rootfs/etc/ssh/sshd_config
-
-      ######################################################################
-      # Configure autologin
-      ######################################################################
-
-      - name: Configure tty autologin
-        run: |
-          sudo mkdir -p \
-            rootfs/etc/systemd/system/getty@tty1.service.d
-
-          cat << EOF | sudo tee \
-            rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf
-          [Service]
-          ExecStart=
-          ExecStart=-/sbin/agetty --autologin root --noclear %I \$TERM
-          EOF
-
-      ######################################################################
-      # Install scripts
-      ######################################################################
-
-      - name: Install hardware collector
-        run: |
-          sudo install -m755 \
-            scripts/hwcollect.sh \
-            rootfs/usr/local/bin/hwcollect.sh
-
-      - name: Install SMB uploader
-        run: |
-          sudo install -m755 \
-            scripts/smbupload.sh \
-            rootfs/usr/local/bin/smbupload.sh
-
-      ######################################################################
-      # Install services
-      ######################################################################
-
-      - name: Install services
-        run: |
-
-          cat << EOF | sudo tee \
-            rootfs/etc/systemd/system/hwcollect.service
-          [Unit]
-          Description=Hardware Inventory Collection
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/local/bin/hwcollect.sh
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-
-          cat << EOF | sudo tee \
-            rootfs/etc/systemd/system/smbupload.service
-          [Unit]
-          Description=Upload inventory to SMB share
-          After=hwcollect.service
-          Requires=hwcollect.service
-
-          [Service]
-          Type=oneshot
-          StandardInput=tty
-          StandardOutput=journal+console
-          ExecStart=/usr/local/bin/smbupload.sh
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-
-      ######################################################################
-      # Enable services
-      ######################################################################
-
+      ###################################################################### Enable services ######################################################################
       - name: Enable services
         run: |
           sudo chroot rootfs systemctl enable ssh
           sudo chroot rootfs systemctl enable systemd-networkd
+          sudo chroot rootfs systemctl enable haveged
           sudo chroot rootfs systemctl enable hwcollect.service
           sudo chroot rootfs systemctl enable smbupload.service
           sudo chroot rootfs systemctl set-default multi-user.target
 
-      ######################################################################
-      # Cleanup
-      ######################################################################
-
+      ###################################################################### Cleanup ######################################################################
       - name: Cleanup image
         run: |
           sudo chroot rootfs /bin/bash -c "
-
             apt-get autoremove -y
             apt-get clean
-
             rm -rf /var/lib/apt/lists/*
-            rm -rf /usr/share/doc/*
-            rm -rf /usr/share/man/*
-            rm -rf /usr/share/info/*
-            rm -rf /tmp/*
           "
 
-      ######################################################################
-      # Unmount chroot filesystems
-      ######################################################################
-
+      ###################################################################### Unmount chroot filesystems ######################################################################
       - name: Unmount chroot filesystems
         run: |
           sudo umount rootfs/dev/pts || true
@@ -456,49 +174,17 @@ jobs:
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      ######################################################################
-      # Copy rootfs
-      ######################################################################
-
+      ###################################################################### Copy rootfs ######################################################################
       - name: Copy rootfs
         run: |
-          sudo rsync -aHAX \
-            --numeric-ids \
-            --exclude=/proc/* \
-            --exclude=/sys/* \
-            --exclude=/dev/* \
-            --exclude=/run/* \
-            --exclude=/tmp/* \
-            rootfs/ initrd-tree/
+          sudo rsync -aHAX --numeric-ids --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/* --exclude=/tmp/* rootfs/ initrd-tree/
 
-      ######################################################################
-      # Install bootstrap init
-      ######################################################################
-
+      ###################################################################### Install bootstrap init ######################################################################
       - name: Install bootstrap init
         run: |
-          cat << 'EOF' | sudo tee initrd-tree/init
-          #!/bin/sh
+          sudo install -m755 overlay/init initrd-tree/init
 
-          mount -t devtmpfs devtmpfs /dev
-          mount -t proc proc /proc
-          mount -t sysfs sysfs /sys
-          mount -t tmpfs tmpfs /run
-          mount -t tmpfs tmpfs /tmp
-
-          mkdir -p /dev/pts
-
-          mount -t devpts devpts /dev/pts
-
-          exec /lib/systemd/systemd
-          EOF
-
-          sudo chmod +x initrd-tree/init
-
-      ######################################################################
-      # Runtime directories
-      ######################################################################
-
+      ###################################################################### Runtime directories ######################################################################
       - name: Create runtime directories
         run: |
           sudo mkdir -p initrd-tree/run
@@ -506,59 +192,38 @@ jobs:
           sudo mkdir -p initrd-tree/root
           sudo mkdir -p initrd-tree/run/sshd
           sudo mkdir -p initrd-tree/var/run/sshd
+          sudo mkdir -p initrd-tree/sys/fs/cgroup
 
-      ######################################################################
-      # Device nodes
-      ######################################################################
-
+      ###################################################################### Device nodes ######################################################################
       - name: Create device nodes
         run: |
           sudo mkdir -p initrd-tree/dev
-
           sudo mknod -m 622 initrd-tree/dev/console c 5 1 || true
           sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
           sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
 
-      ######################################################################
-      # Build initramfs
-      ######################################################################
-
+      ###################################################################### Build initramfs ######################################################################
       - name: Build initramfs
         run: |
           cd initrd-tree
+          sudo find . -print0 | sudo cpio --null -ov --format=newc | gzip -9 > ../initramfs-${{ matrix.arch }}.cpio.gz
 
-          sudo find . -print0 \
-            | sudo cpio --null -ov --format=newc \
-            | gzip -9 \
-            > ../initramfs-${{ matrix.arch }}.cpio.gz
-
-      ######################################################################
-      # Upload artifacts
-      ######################################################################
-
+      ###################################################################### Upload artifacts ######################################################################
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
-
         with:
           name: initramfs-${{ matrix.arch }}
-
           path: |
             initramfs-${{ matrix.arch }}.cpio.gz
             ${{ matrix.kernel_deb }}
 
-      ######################################################################
-      # Publish release
-      ######################################################################
-
+      ###################################################################### Publish release ######################################################################
       - name: Publish release
         uses: softprops/action-gh-release@v2
-
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
-
           files: |
             initramfs-${{ matrix.arch }}.cpio.gz
             ${{ matrix.kernel_deb }}
-
         env:
           GITHUB_TOKEN: ${{ github.token }}
