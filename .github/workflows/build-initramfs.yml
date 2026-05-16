@@ -100,7 +100,8 @@ jobs:
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
-            xargs -a /root/packages.txt apt-get install -y --no-install-recommends
+            grep -v '^[[:space:]]*#' /root/packages.txt | grep -v '^[[:space:]]*$' | tr -d '\r' > /root/packages-clean.txt
+            apt-get install -y --no-install-recommends \$(cat /root/packages-clean.txt)
             apt-get clean
           "
 
