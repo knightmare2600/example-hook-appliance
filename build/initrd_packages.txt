@@ -1,0 +1,41 @@
+# Packages installed inside the initrd image only
+# Version history:
+# 0.1.0 - Initial split from packages.txt
+cifs-utils
+dbus
+dbus-broker
+dmidecode
+dnsutils
+ethtool
+firmware-linux-free
+firmware-misc-nonfree
+firmware-realtek
+haveged
+ipmitool
+iproute2
+iputils-ping
+isc-dhcp-client
+kmod
+less
+login
+lshw
+mdadm
+mount
+net-tools
+nvme-cli
+openssh-client
+openssh-server
+passwd
+pciutils
+procps
+python3
+python3-requests
+smartmontools
+smbclient
+systemd
+systemd-sysv
+udev
+usbutils
+util-linux
+vim-tiny
+

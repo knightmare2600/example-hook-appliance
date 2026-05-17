@@ -1,5 +1,10 @@
 name: Build Provisioning Runtime
 
+# Version history:
+# 0.1.0 - Initial workflow
+# 0.1.1 - Split packages.txt into shared/initrd/build lists; single-source locale.gen in shared/;
+#          strip locales package post-generation; move build deps out of hardcoded apt-get line
+
 on:
   workflow_dispatch: {}
 
@@ -7,7 +12,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_VERSION: 0.1.0
+  RELEASE_VERSION: 0.1.1
 
 jobs:
 
@@ -36,29 +41,30 @@ jobs:
 
     steps:
 
-      ###################################################################### Checkout ######################################################################
+      ########## Checkout ##########
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      ###################################################################### Build dependencies ######################################################################
+      ########## Build dependencies ##########
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap qemu-user-static binfmt-support cpio gzip xz-utils zstd rsync wget curl dpkg initramfs-tools linux-base locales
+          sudo apt-get install -y $(grep -v '^\s*#' build/build_packages.txt | grep -v '^\s*$' | tr -d '\r')
+          sudo apt-get install -y $(grep -v '^\s*#' build/shared_packages.txt | grep -v '^\s*$' | tr -d '\r')
 
-      ###################################################################### Working directories ######################################################################
+      ########## Working directories ##########
       - name: Create working directories
         run: |
           sudo rm -rf rootfs initrd-tree
           mkdir -p rootfs
           mkdir -p initrd-tree
 
-      ###################################################################### Bootstrap Debian ######################################################################
+      ########## Bootstrap Debian ##########
       - name: Bootstrap Debian rootfs
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             echo "[*] ARM64 foreign bootstrap"
-            sudo debootstrap --arch=arm64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR} --foreign 
+            sudo debootstrap --arch=arm64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR} --foreign
             sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
             sudo chroot rootfs /debootstrap/debootstrap --second-stage
           else
@@ -66,7 +72,7 @@ jobs:
             sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
           fi
 
-      ###################################################################### Verify bootstrap ######################################################################
+      ########## Verify bootstrap ##########
       - name: Verify bootstrap
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -77,21 +83,7 @@ jobs:
             ls -l /bin/bash
           "
 
-      ###################################################################### Verify runtime packages ######################################################################
-      - name: Verify runtime packages
-        run: |
-          sudo chroot rootfs /bin/bash -c "
-            echo '=== locale-gen ==='
-            command -v locale-gen || true
-
-            echo '=== depmod ==='
-            command -v depmod || true
-
-            echo '=== Installed packages ==='
-            dpkg -l locales kmod || true
-          "
-
-      ###################################################################### Mount chroot filesystems ######################################################################
+      ########## Mount chroot filesystems ##########
       - name: Mount chroot filesystems
         run: |
           sudo mount --bind /dev rootfs/dev
@@ -99,47 +91,67 @@ jobs:
           sudo mount --bind /sys rootfs/sys
           sudo mount --bind /dev/pts rootfs/dev/pts
 
-      ###################################################################### Download kernel ######################################################################
+      ########## Download kernel ##########
       - name: Download kernel package
         run: |
           rm -f "${{ matrix.kernel_deb }}"
           wget -O "${{ matrix.kernel_deb }}" "${{ matrix.kernel_url }}"
           sha256sum "${{ matrix.kernel_deb }}"
 
-      ###################################################################### Install runtime packages ######################################################################
+      ########## Install shared + initrd packages ##########
       - name: Install runtime packages
         run: |
-          sudo cp build/packages.txt rootfs/root/packages.txt
+          sudo cp build/shared_packages.txt rootfs/root/shared_packages.txt
+          sudo cp build/initrd_packages.txt rootfs/root/initrd_packages.txt
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
-            grep -v '^[[:space:]]*#' /root/packages.txt | grep -v '^[[:space:]]*$' | tr -d '\r' > /root/packages-clean.txt
-            apt-get install -y --no-install-recommends \$(cat /root/packages-clean.txt)
+            grep -v '^\s*#' /root/shared_packages.txt | grep -v '^\s*$' | tr -d '\r' > /root/install.txt
+            grep -v '^\s*#' /root/initrd_packages.txt | grep -v '^\s*$' | tr -d '\r' >> /root/install.txt
+            apt-get install -y --no-install-recommends \$(cat /root/install.txt)
             apt-get clean
           "
 
-      ###################################################################### Apply overlay ######################################################################
+      ########## Apply overlay ##########
       - name: Apply overlay
         run: |
           sudo rsync -a overlay/ rootfs/
 
-      ###################################################################### Fix overlay permissions ######################################################################
+      ########## Fix overlay permissions ##########
       - name: Fix overlay permissions
         run: |
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
           sudo chmod +x rootfs/usr/local/bin/smbupload.sh
 
-      ###################################################################### Generate locales ######################################################################
+      ########## Generate locales ##########
       - name: Generate locales
         run: |
-          sudo chroot rootfs /bin/bash -c "locale-gen"
+          sudo cp shared/locale.gen rootfs/etc/locale.gen
+          sudo chroot rootfs /bin/bash -c "
+            locale-gen
+            update-locale LANG=en_GB.UTF-8 LC_ALL=en_GB.UTF-8
+          "
+          echo "[*] Verifying generated locale data:"
+          sudo ls -lah rootfs/usr/lib/locale/
 
-      ###################################################################### Generate machine-id ######################################################################
+      ########## Strip locales package (keep generated data) ##########
+      - name: Strip locales package
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            apt-get remove -y locales
+            apt-get autoremove -y
+            apt-get clean
+            rm -rf /var/lib/apt/lists/*
+          "
+          echo "[*] Verifying locale data survived strip:"
+          sudo ls -lah rootfs/usr/lib/locale/
+
+      ########## Generate machine-id ##########
       - name: Generate machine-id
         run: |
           sudo systemd-machine-id-setup --root=rootfs
 
-      ###################################################################### Install kernel package ######################################################################
+      ########## Install kernel package ##########
       - name: Install kernel package
         run: |
           sudo cp "${{ matrix.kernel_deb }}" rootfs/root/
@@ -150,37 +162,38 @@ jobs:
             apt-get install -fy
           "
 
-      ###################################################################### Generate module dependencies ######################################################################
+      ########## Generate module dependencies ##########
       - name: Generate depmod
         run: |
           sudo chroot rootfs depmod -a "${{ matrix.kernel_version }}"
 
-      ###################################################################### Remove duplicate boot kernel ######################################################################
+      ########## Remove duplicate boot kernel ##########
       - name: Remove embedded boot kernel
         run: |
           sudo rm -f rootfs/boot/vmlinuz-* || true
           sudo rm -f rootfs/boot/initrd.img-* || true
 
-      ###################################################################### Enable services ######################################################################
+      ########## Enable services ##########
       - name: Enable services
         run: |
-          sudo chroot rootfs systemctl enable ssh
+          sudo chroot rootfs systemctl enable ssh || sudo chroot rootfs systemctl enable sshd || true
           sudo chroot rootfs systemctl enable systemd-networkd
           sudo chroot rootfs systemctl enable haveged
           sudo chroot rootfs systemctl enable hwcollect.service
           sudo chroot rootfs systemctl enable smbupload.service
           sudo chroot rootfs systemctl set-default multi-user.target
 
-      ###################################################################### Cleanup ######################################################################
+      ########## Cleanup ##########
       - name: Cleanup image
         run: |
           sudo chroot rootfs /bin/bash -c "
             apt-get autoremove -y
             apt-get clean
             rm -rf /var/lib/apt/lists/*
+            rm -f /root/shared_packages.txt /root/initrd_packages.txt /root/install.txt
           "
 
-      ###################################################################### Unmount chroot filesystems ######################################################################
+      ########## Unmount chroot filesystems ##########
       - name: Unmount chroot filesystems
         run: |
           sudo umount rootfs/dev/pts || true
@@ -188,17 +201,17 @@ jobs:
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      ###################################################################### Copy rootfs ######################################################################
+      ########## Copy rootfs ##########
       - name: Copy rootfs
         run: |
           sudo rsync -aHAX --numeric-ids --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/* --exclude=/tmp/* rootfs/ initrd-tree/
 
-      ###################################################################### Install bootstrap init ######################################################################
+      ########## Install bootstrap init ##########
       - name: Install bootstrap init
         run: |
           sudo install -m755 overlay/init initrd-tree/init
 
-      ###################################################################### Runtime directories ######################################################################
+      ########## Runtime directories ##########
       - name: Create runtime directories
         run: |
           sudo mkdir -p initrd-tree/run
@@ -208,7 +221,7 @@ jobs:
           sudo mkdir -p initrd-tree/var/run/sshd
           sudo mkdir -p initrd-tree/sys/fs/cgroup
 
-      ###################################################################### Device nodes ######################################################################
+      ########## Device nodes ##########
       - name: Create device nodes
         run: |
           sudo mkdir -p initrd-tree/dev
@@ -216,13 +229,13 @@ jobs:
           sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
           sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
 
-      ###################################################################### Build initramfs ######################################################################
+      ########## Build initramfs ##########
       - name: Build initramfs
         run: |
           cd initrd-tree
-          sudo find . -print0 | sudo cpio --null -ov --format=newc | gzip -9 > ../initramfs-${{ matrix.arch }}.cpio.gz
+          sudo find . -print0 | sudo cpio --null -ov --format=newc | sudo gzip -9 | sudo tee ../initramfs-${{ matrix.arch }}.cpio.gz > /dev/null
 
-      ###################################################################### Upload artifacts ######################################################################
+      ########## Upload artifacts ##########
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -231,7 +244,7 @@ jobs:
             initramfs-${{ matrix.arch }}.cpio.gz
             ${{ matrix.kernel_deb }}
 
-      ###################################################################### Publish release ######################################################################
+      ########## Publish release ##########
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -241,3 +254,4 @@ jobs:
             ${{ matrix.kernel_deb }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+

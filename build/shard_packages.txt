@@ -1,0 +1,10 @@
+# Packages required in both the build environment and the initrd image
+# Version history:
+# 0.1.0 - Initial split from packages.txt
+bash
+ca-certificates
+curl
+jq
+locales
+wget
+
