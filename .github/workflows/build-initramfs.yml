@@ -4,6 +4,8 @@ name: Build Provisioning Runtime
 # 0.1.0 - Initial workflow
 # 0.1.1 - Split packages.txt into shared/initrd/build lists; single-source locale.gen in shared/;
 #          strip locales package post-generation; move build deps out of hardcoded apt-get line
+# 0.1.2 - Enable non-free-firmware in chroot sources.list before package install;
+#          remove localepurge from build_packages.txt (Debian-only, not on Ubuntu runner)
 
 on:
   workflow_dispatch: {}
@@ -105,6 +107,7 @@ jobs:
           sudo cp build/initrd_packages.txt rootfs/root/initrd_packages.txt
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
+            echo 'deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware' > /etc/apt/sources.list
             apt-get update
             grep -v '^\s*#' /root/shared_packages.txt | grep -v '^\s*$' | tr -d '\r' > /root/install.txt
             grep -v '^\s*#' /root/initrd_packages.txt | grep -v '^\s*$' | tr -d '\r' >> /root/install.txt
@@ -204,7 +207,13 @@ jobs:
       ########## Copy rootfs ##########
       - name: Copy rootfs
         run: |
-          sudo rsync -aHAX --numeric-ids --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/* --exclude=/tmp/* rootfs/ initrd-tree/
+          sudo rsync -aHAX --numeric-ids \
+            --exclude=/proc/* \
+            --exclude=/sys/* \
+            --exclude=/dev/* \
+            --exclude=/run/* \
+            --exclude=/tmp/* \
+            rootfs/ initrd-tree/
 
       ########## Install bootstrap init ##########
       - name: Install bootstrap init
@@ -254,4 +263,3 @@ jobs:
             ${{ matrix.kernel_deb }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-
