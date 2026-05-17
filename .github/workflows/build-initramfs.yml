@@ -214,10 +214,6 @@ jobs:
             --exclude=/tmp/* \
             rootfs/ initrd-tree/
 
-      ########## Install bootstrap init ##########
-      - name: Install bootstrap init
-        run: |
-          sudo install -m755 overlay/init initrd-tree/init
 
       ########## Runtime directories ##########
       - name: Create runtime directories
