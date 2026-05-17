@@ -6,6 +6,7 @@ name: Build Provisioning Runtime
 #          strip locales package post-generation; move build deps out of hardcoded apt-get line
 # 0.1.2 - Enable non-free-firmware in chroot sources.list before package install;
 #          remove localepurge from build_packages.txt (Debian-only, not on Ubuntu runner)
+# 0.1.3 - Remove Install bootstrap init step; systemd is PID 1, no custom init script required
 
 on:
   workflow_dispatch: {}
@@ -66,7 +67,7 @@ jobs:
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             echo "[*] ARM64 foreign bootstrap"
-            sudo debootstrap --arch=arm64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR} --foreign
+            sudo debootstrap --arch=arm64 --variant=minbase --foreign ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
             sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
             sudo chroot rootfs /debootstrap/debootstrap --second-stage
           else
@@ -213,7 +214,6 @@ jobs:
             --exclude=/run/* \
             --exclude=/tmp/* \
             rootfs/ initrd-tree/
-
 
       ########## Runtime directories ##########
       - name: Create runtime directories
