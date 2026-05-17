@@ -1,12 +1,18 @@
 [Unit]
-Description=Hardware Inventory Collection
-After=network-online.target systemd-udev-settle.service
-Wants=network-online.target systemd-udev-settle.service
+Description=Spejder Hardware Inventory Collector
+# Version history:
+# 0.1.0 - Initial service
+# 0.2.0 - Wait on network-online.target so ip route exists before hwcollect runs
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/hwcollect.sh
-TimeoutStartSec=10min
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target
+
