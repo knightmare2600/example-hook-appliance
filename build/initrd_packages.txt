@@ -17,6 +17,7 @@ iputils-ping
 isc-dhcp-client
 kmod
 less
+linux-base
 login
 lshw
 mdadm
@@ -38,4 +39,3 @@ udev
 usbutils
 util-linux
 vim-tiny
-

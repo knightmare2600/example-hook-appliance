@@ -9,7 +9,6 @@ debootstrap
 dpkg
 gzip
 initramfs-tools
-linux-base
 qemu-user-static
 rsync
 xz-utils
