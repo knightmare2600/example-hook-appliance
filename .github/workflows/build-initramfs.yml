@@ -160,8 +160,7 @@ jobs:
           sudo cp "${{ matrix.kernel_deb }}" rootfs/root/
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
-            dpkg -i /root/${{ matrix.kernel_deb }} || true
-            apt-get update
+            dpkg --unpack /root/${{ matrix.kernel_deb }}
             apt-get install -fy
           "
 
