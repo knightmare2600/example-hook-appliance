@@ -127,6 +127,11 @@ jobs:
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
           sudo chmod +x rootfs/usr/local/bin/smbupload.sh
 
+      ########## Make init be SystemD ##########
+      - name: Install init symlink
+        run: |
+          sudo ln -sf /lib/systemd/systemd initrd-tree/init
+
       ########## Generate locales ##########
       - name: Generate locales
         run: |
