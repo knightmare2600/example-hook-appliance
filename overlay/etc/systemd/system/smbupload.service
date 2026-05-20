@@ -1,15 +1,19 @@
 [Unit]
-Description=Upload inventory to SMB share
-After=hwcollect.service network-online.target
+Description=Spejder SMB Inventory Upload
+# Version history:
+# 0.1.0 - Initial service
+# 0.2.0 - Add TTY allocation for interactive credential prompt
+After=hwcollect.service
 Requires=hwcollect.service
-Wants=network-online.target
 
 [Service]
 Type=oneshot
-StandardInput=tty
-StandardOutput=journal+console
-TimeoutStartSec=15min
 ExecStart=/usr/local/bin/smbupload.sh
+StandardInput=tty
+TTYPath=/dev/tty1
+StandardOutput=tty
+StandardError=tty
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
