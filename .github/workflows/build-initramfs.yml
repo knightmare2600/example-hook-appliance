@@ -201,6 +201,15 @@ jobs:
             rm -rf /var/lib/apt/lists/*
             rm -f /root/shared_packages.txt /root/initrd_packages.txt /root/install.txt
           "
+      ########## Verify kernel modules ##########
+      - name: Verify kernel modules
+        run: |
+          MODULE_COUNT=$(find rootfs/lib/modules/ -name '*.ko*' | wc -l)
+          echo "[*] Kernel module count: ${MODULE_COUNT}"
+          if [ "${MODULE_COUNT}" -lt 100 ]; then
+            echo "[!] ERROR: suspiciously few kernel modules - kernel install likely failed"
+            exit 1
+          fi
 
       ########## Unmount chroot filesystems ##########
       - name: Unmount chroot filesystems
