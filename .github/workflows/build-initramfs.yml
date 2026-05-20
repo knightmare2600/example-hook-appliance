@@ -7,7 +7,8 @@ name: Build Provisioning Runtime
 # 0.1.2 - Enable non-free-firmware in chroot sources.list before package install;
 #          remove localepurge from build_packages.txt (Debian-only, not on Ubuntu runner)
 # 0.1.3 - Remove Install bootstrap init step; systemd is PID 1, no custom init script required
-
+# 0.1.4 - No custom init script required, but a symlink is [BUGFIX]
+        
 on:
   workflow_dispatch: {}
 
