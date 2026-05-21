@@ -58,8 +58,8 @@ Missing tools or absent hardware produce empty fields rather than aborting the r
 .
 ├── .github/
 │   └── workflows/
-│       ├── build.yml        # Builds initramfs for both arches
-│       └── preflight.yml    # Warms caches, commits kernel debs to sources/
+│       ├── build-initramfs.yml # Builds initramfs for both arches
+│       └── pre-flight.yml      # Warms caches, commits kernel debs to sources/
 ├── build/
 │   ├── build_packages.txt   # Packages for the CI build environment only
 │   ├── initrd_packages.txt  # Packages installed inside the initramfs
@@ -85,8 +85,8 @@ Missing tools or absent hardware produce empty fields rather than aborting the r
 │   └── locale.gen           # Single source of truth for locale generation
 │                            # (en_GB, da_DK, de_DE — everyone else can whistle)
 └── sources/
-    ├── *.deb                # Kernel debs committed by preflight.yml
-    └── firmware-*/          # Firmware deb cache (gitignored, populated by preflight)
+    ├── *.deb                # Kernel debs committed by pre-flight.yml
+    └── firmware-*/          # Firmware deb cache (gitignored, populated by pre-flight)
 ```
 
 ---
@@ -95,7 +95,7 @@ Missing tools or absent hardware produce empty fields rather than aborting the r
 
 ### First run / cache refresh
 
-Run **Preflight Cache Warmer** manually via Actions → `preflight.yml` → Run workflow.
+Run **Pre-flight Cache Warmer** manually via Actions → `pre-flight.yml` → Run workflow.
 
 This downloads the kernel debs for both arches, commits them to `sources/`, and
 pre-warms the firmware and apt package caches. Takes ~15 minutes but only needs
