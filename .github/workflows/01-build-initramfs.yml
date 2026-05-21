@@ -55,7 +55,8 @@ jobs:
       - name: Restore build host apt cache
         uses: actions/cache@v4
         with:
-          path: /var/cache/apt/archives
+          path: |
+            /var/cache/apt/archives/*.deb
           key: build-apt-${{ hashFiles('build/build_packages.txt', 'build/shared_packages.txt') }}
           restore-keys: build-apt-
 
