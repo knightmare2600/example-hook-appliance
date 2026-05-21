@@ -1,12 +1,16 @@
-name: Spejder Preflight Cache Warmer
+name: Spejder Pre-flight Cache Warmer
 
 # Version history:
 # 0.1.0 - Initial preflight workflow
-#          Downloads kernel debs and commits to sources/
-#          Pre-warms firmware deb cache per arch
-#          Pre-warms build host apt cache
-#          Pre-warms rootfs apt cache per arch
-#          Run manually when you want to refresh cached artefacts
+# 0.1.1 - Fix git add -f to bypass gitignore on runner
+# 0.1.2 - Fix apt cache path to exclude lock and partial files
+# 0.1.3 - Add git lfs install for kernel debs > 100MB
+# 0.1.4 - Add SHA256 verification for kernel debs (checksums from packages.debian.org);
+#          detect and reject LFS pointer files; kernel_sha256 in matrix
+#
+# Run this manually when you want to refresh cached artefacts or after a kernel version bump.
+# This workflow downloads kernel debs, commits them to sources/ via Git LFS,
+# and pre-warms firmware and apt package caches for both architectures.
 
 on:
   workflow_dispatch: {}
@@ -17,7 +21,7 @@ permissions:
 jobs:
 
   preflight:
-    name: Preflight ${{ matrix.arch }}
+    name: Pre-flight ${{ matrix.arch }}
     runs-on: ubuntu-24.04
 
     strategy:
@@ -29,11 +33,15 @@ jobs:
             kernel_version: 6.12.73+deb13-amd64
             kernel_deb: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
             kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-amd64/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+            # SHA256 from https://packages.debian.org/trixie/amd64/linux-image-6.12.73+deb13-amd64/download
+            kernel_sha256: 1589680329195482fb67cab331c6fc7bb71bd4d4f68fae16b4c5d191636d236f
 
           - arch: arm64
             kernel_version: 6.12.73+deb13-arm64
             kernel_deb: linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
             kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-arm64/linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
+            # SHA256 from https://packages.debian.org/trixie/arm64/linux-image-6.12.73+deb13-arm64/download
+            kernel_sha256: 98fadebbd8d967df37ae5b931c0a8e2720cfceb76a2e1961f6fa3e9141632521
 
     env:
       DEBIAN_RELEASE: trixie
@@ -44,6 +52,8 @@ jobs:
       ###################################################################### Checkout ######################################################################
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       ###################################################################### Build host apt cache ######################################################################
       - name: Cache build host apt packages
@@ -54,40 +64,75 @@ jobs:
           key: build-apt-${{ hashFiles('build/build_packages.txt', 'build/shared_packages.txt') }}
           restore-keys: build-apt-
 
-      - name: Install and cache build dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y $(grep -v '^\s*#' build/build_packages.txt | grep -v '^\s*$' | tr -d '\r')
           sudo apt-get install -y $(grep -v '^\s*#' build/shared_packages.txt | grep -v '^\s*$' | tr -d '\r')
 
-      ###################################################################### Kernel deb - download and commit to sources/ ######################################################################
-      - name: Check if kernel deb already in sources/
+      ###################################################################### Kernel deb - verify existing or download fresh ######################################################################
+      # Checksums sourced from packages.debian.org - update alongside kernel version bumps
+      # LFS pointer files (< 1MB) are detected, removed, and re-downloaded automatically
+      - name: Check kernel deb in sources/
         id: kernel_check
         run: |
-          if [ -f "sources/${{ matrix.kernel_deb }}" ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "[*] Kernel deb already in sources/ - skipping download"
+          KERNEL_DEB="${{ matrix.kernel_deb }}"
+          EXPECTED_SHA256="${{ matrix.kernel_sha256 }}"
+          NEEDS_DOWNLOAD=true
+
+          if [ -f "sources/${KERNEL_DEB}" ]; then
+            ACTUAL_SIZE=$(wc -c < "sources/${KERNEL_DEB}")
+            if [ "${ACTUAL_SIZE}" -lt 1000000 ]; then
+              echo "[!] sources/${KERNEL_DEB} is ${ACTUAL_SIZE} bytes - LFS pointer or corrupt, will re-download"
+              git rm -f "sources/${KERNEL_DEB}" || rm -f "sources/${KERNEL_DEB}"
+            else
+              ACTUAL_SHA256=$(sha256sum "sources/${KERNEL_DEB}" | awk '{print $1}')
+              if [ "${ACTUAL_SHA256}" = "${EXPECTED_SHA256}" ]; then
+                echo "[*] sources/${KERNEL_DEB} SHA256 verified - no download needed"
+                NEEDS_DOWNLOAD=false
+              else
+                echo "[!] SHA256 mismatch on sources/${KERNEL_DEB}"
+                echo "[!] Expected: ${EXPECTED_SHA256}"
+                echo "[!] Got:      ${ACTUAL_SHA256}"
+                echo "[!] Removing and re-downloading"
+                git rm -f "sources/${KERNEL_DEB}" || rm -f "sources/${KERNEL_DEB}"
+              fi
+            fi
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "[*] Kernel deb not in sources/ - will download"
+            echo "[*] sources/${KERNEL_DEB} not present - will download"
           fi
 
+          echo "needs_download=${NEEDS_DOWNLOAD}" >> $GITHUB_OUTPUT
+
       - name: Download kernel deb
-        if: steps.kernel_check.outputs.exists == 'false'
+        if: steps.kernel_check.outputs.needs_download == 'true'
         run: |
           mkdir -p sources
-          wget -O "sources/${{ matrix.kernel_deb }}" "${{ matrix.kernel_url }}"
-          echo "[*] SHA256:"
-          sha256sum "sources/${{ matrix.kernel_deb }}"
+          KERNEL_DEB="${{ matrix.kernel_deb }}"
+          EXPECTED_SHA256="${{ matrix.kernel_sha256 }}"
 
-      - name: Commit kernel deb to sources/
-        if: steps.kernel_check.outputs.exists == 'false'
+          echo "[*] Downloading ${KERNEL_DEB}..."
+          wget -O "sources/${KERNEL_DEB}" "${{ matrix.kernel_url }}"
+
+          ACTUAL_SHA256=$(sha256sum "sources/${KERNEL_DEB}" | awk '{print $1}')
+          if [ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]; then
+            echo "[!] ERROR: downloaded kernel deb failed SHA256 verification"
+            echo "[!] Expected: ${EXPECTED_SHA256}"
+            echo "[!] Got:      ${ACTUAL_SHA256}"
+            rm -f "sources/${KERNEL_DEB}"
+            exit 1
+          fi
+          echo "[*] SHA256 verified: ${ACTUAL_SHA256}"
+          echo "[*] Size: $(wc -c < "sources/${KERNEL_DEB}") bytes"
+
+      - name: Commit kernel deb to sources/ via Git LFS
+        if: steps.kernel_check.outputs.needs_download == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git lfs install
           git add -f "sources/${{ matrix.kernel_deb }}"
-          git commit -m "preflight: add kernel deb ${{ matrix.kernel_deb }}"
+          git commit -m "preflight: add kernel deb ${{ matrix.kernel_deb }} (SHA256 verified)"
           git push
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -105,10 +150,8 @@ jobs:
         if: steps.firmware_cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p sources/firmware-${{ matrix.arch }}
-          sudo apt-get install -y debootstrap qemu-user-static binfmt-support
-
-          # Bootstrap a minimal rootfs just to pull firmware debs
           sudo rm -rf firmware-bootstrap
+
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             sudo debootstrap --arch=arm64 --variant=minbase --foreign ${DEBIAN_RELEASE} firmware-bootstrap ${DEBIAN_MIRROR}
             sudo cp /usr/bin/qemu-aarch64-static firmware-bootstrap/usr/bin/
@@ -117,35 +160,18 @@ jobs:
             sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} firmware-bootstrap ${DEBIAN_MIRROR}
           fi
 
-          # Pull firmware debs and all dependencies into the cache dir
           sudo chroot firmware-bootstrap /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
             echo 'deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware' > /etc/apt/sources.list
             apt-get update
-            apt-get install -y --no-install-recommends --download-only \
-              firmware-linux-free firmware-misc-nonfree firmware-realtek
-            cp /var/cache/apt/archives/*.deb /tmp/firmware-debs/ 2>/dev/null || true
-          " || true
-
-          sudo mkdir -p firmware-bootstrap/tmp/firmware-debs
-          sudo chroot firmware-bootstrap /bin/bash -c "
-            echo 'deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware' > /etc/apt/sources.list
-            apt-get update
-            mkdir -p /tmp/firmware-debs
-            cd /tmp/firmware-debs
-            apt-get download \$(apt-cache depends --recurse --no-recommends --no-suggests \
-              firmware-linux-free firmware-misc-nonfree firmware-realtek \
-              | grep '^\w' | sort -u) 2>/dev/null || true
             apt-get install -y --no-install-recommends \
               firmware-linux-free firmware-misc-nonfree firmware-realtek
-            dpkg -l firmware-linux-free firmware-misc-nonfree firmware-realtek
+            apt-get clean
           "
 
-          # Copy the installed debs out to our cache folder
           sudo find firmware-bootstrap/var/cache/apt/archives/ -name '*.deb' \
             -exec cp {} sources/firmware-${{ matrix.arch }}/ \;
-          echo "[*] Cached firmware debs:"
-          ls -lah sources/firmware-${{ matrix.arch }}/
-
+          echo "[*] Cached $(ls sources/firmware-${{ matrix.arch }}/*.deb | wc -l) firmware debs"
           sudo rm -rf firmware-bootstrap
 
       ###################################################################### Rootfs apt cache ######################################################################
@@ -161,8 +187,8 @@ jobs:
         if: steps.rootfs_cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p sources/rootfs-apt-${{ matrix.arch }}
-
           sudo rm -rf rootfs-preflight
+
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             sudo debootstrap --arch=arm64 --variant=minbase --foreign ${DEBIAN_RELEASE} rootfs-preflight ${DEBIAN_MIRROR}
             sudo cp /usr/bin/qemu-aarch64-static rootfs-preflight/usr/bin/
@@ -183,30 +209,35 @@ jobs:
             apt-get install -y --no-install-recommends \$(cat /root/install.txt)
           "
 
-          # Pull the downloaded debs into our cache folder
           sudo find rootfs-preflight/var/cache/apt/archives/ -name '*.deb' \
             -exec cp {} sources/rootfs-apt-${{ matrix.arch }}/ \;
-          echo "[*] Cached rootfs apt debs: $(ls sources/rootfs-apt-${{ matrix.arch }}/ | wc -l) packages"
+          echo "[*] Cached $(ls sources/rootfs-apt-${{ matrix.arch }}/*.deb | wc -l) rootfs apt debs"
 
-          # Write a manifest of what was installed
           sudo chroot rootfs-preflight /bin/bash -c "dpkg -l" \
             > sources/rootfs-apt-${{ matrix.arch }}/installed-manifest-${{ matrix.arch }}.txt
-          echo "[*] Manifest written"
+          echo "[*] Package manifest written"
 
           sudo rm -rf rootfs-preflight
 
       ###################################################################### Summary ######################################################################
-      - name: Preflight summary
+      - name: Pre-flight summary
         run: |
           echo "=================================================="
-          echo "Preflight complete for ${{ matrix.arch }}"
+          echo "Pre-flight complete for ${{ matrix.arch }}"
           echo "=================================================="
           echo ""
-          echo "Kernel deb: sources/${{ matrix.kernel_deb }}"
-          echo "Firmware cache: sources/firmware-${{ matrix.arch }}/"
-          echo "Rootfs apt cache: sources/rootfs-apt-${{ matrix.arch }}/"
+          echo "Kernel deb:    sources/${{ matrix.kernel_deb }}"
+          if [ -f "sources/${{ matrix.kernel_deb }}" ]; then
+            echo "Kernel size:   $(wc -c < "sources/${{ matrix.kernel_deb }}") bytes"
+            echo "Kernel SHA256: $(sha256sum "sources/${{ matrix.kernel_deb }}" | awk '{print $1}')"
+          fi
           echo ""
+          if [ -d "sources/firmware-${{ matrix.arch }}" ]; then
+            echo "Firmware debs: $(ls sources/firmware-${{ matrix.arch }}/*.deb 2>/dev/null | wc -l) packages"
+          fi
+          if [ -d "sources/rootfs-apt-${{ matrix.arch }}" ]; then
+            echo "Rootfs debs:   $(ls sources/rootfs-apt-${{ matrix.arch }}/*.deb 2>/dev/null | wc -l) packages"
+          fi
           if [ -f "sources/rootfs-apt-${{ matrix.arch }}/installed-manifest-${{ matrix.arch }}.txt" ]; then
-            PKG_COUNT=$(grep -c '^ii' sources/rootfs-apt-${{ matrix.arch }}/installed-manifest-${{ matrix.arch }}.txt || true)
-            echo "Packages in manifest: ${PKG_COUNT}"
+            echo "Manifest pkgs: $(grep -c '^ii' sources/rootfs-apt-${{ matrix.arch }}/installed-manifest-${{ matrix.arch }}.txt || true)"
           fi
