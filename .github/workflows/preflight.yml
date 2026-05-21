@@ -1,0 +1,210 @@
+name: Spejder Preflight Cache Warmer
+
+# Version history:
+# 0.1.0 - Initial preflight workflow
+#          Downloads kernel debs and commits to sources/
+#          Pre-warms firmware deb cache per arch
+#          Pre-warms build host apt cache
+#          Pre-warms rootfs apt cache per arch
+#          Run manually when you want to refresh cached artefacts
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+
+  preflight:
+    name: Preflight ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        include:
+          - arch: amd64
+            kernel_version: 6.12.73+deb13-amd64
+            kernel_deb: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+            kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-amd64/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+
+          - arch: arm64
+            kernel_version: 6.12.73+deb13-arm64
+            kernel_deb: linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
+            kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-arm64/linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
+
+    env:
+      DEBIAN_RELEASE: trixie
+      DEBIAN_MIRROR: http://deb.debian.org/debian
+
+    steps:
+
+      ###################################################################### Checkout ######################################################################
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      ###################################################################### Build host apt cache ######################################################################
+      - name: Cache build host apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: build-apt-${{ hashFiles('build/build_packages.txt', 'build/shared_packages.txt') }}
+          restore-keys: build-apt-
+
+      - name: Install and cache build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $(grep -v '^\s*#' build/build_packages.txt | grep -v '^\s*$' | tr -d '\r')
+          sudo apt-get install -y $(grep -v '^\s*#' build/shared_packages.txt | grep -v '^\s*$' | tr -d '\r')
+
+      ###################################################################### Kernel deb - download and commit to sources/ ######################################################################
+      - name: Check if kernel deb already in sources/
+        id: kernel_check
+        run: |
+          if [ -f "sources/${{ matrix.kernel_deb }}" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "[*] Kernel deb already in sources/ - skipping download"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "[*] Kernel deb not in sources/ - will download"
+          fi
+
+      - name: Download kernel deb
+        if: steps.kernel_check.outputs.exists == 'false'
+        run: |
+          mkdir -p sources
+          wget -O "sources/${{ matrix.kernel_deb }}" "${{ matrix.kernel_url }}"
+          echo "[*] SHA256:"
+          sha256sum "sources/${{ matrix.kernel_deb }}"
+
+      - name: Commit kernel deb to sources/
+        if: steps.kernel_check.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "sources/${{ matrix.kernel_deb }}"
+          git commit -m "preflight: add kernel deb ${{ matrix.kernel_deb }}"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      ###################################################################### Firmware deb cache ######################################################################
+      - name: Cache firmware debs
+        uses: actions/cache@v4
+        id: firmware_cache
+        with:
+          path: sources/firmware-${{ matrix.arch }}
+          key: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-${{ hashFiles('build/initrd_packages.txt') }}
+          restore-keys: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-
+
+      - name: Download and cache firmware debs
+        if: steps.firmware_cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p sources/firmware-${{ matrix.arch }}
+          sudo apt-get install -y debootstrap qemu-user-static binfmt-support
+
+          # Bootstrap a minimal rootfs just to pull firmware debs
+          sudo rm -rf firmware-bootstrap
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            sudo debootstrap --arch=arm64 --variant=minbase --foreign ${DEBIAN_RELEASE} firmware-bootstrap ${DEBIAN_MIRROR}
+            sudo cp /usr/bin/qemu-aarch64-static firmware-bootstrap/usr/bin/
+            sudo chroot firmware-bootstrap /debootstrap/debootstrap --second-stage
+          else
+            sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} firmware-bootstrap ${DEBIAN_MIRROR}
+          fi
+
+          # Pull firmware debs and all dependencies into the cache dir
+          sudo chroot firmware-bootstrap /bin/bash -c "
+            echo 'deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware' > /etc/apt/sources.list
+            apt-get update
+            apt-get install -y --no-install-recommends --download-only \
+              firmware-linux-free firmware-misc-nonfree firmware-realtek
+            cp /var/cache/apt/archives/*.deb /tmp/firmware-debs/ 2>/dev/null || true
+          " || true
+
+          sudo mkdir -p firmware-bootstrap/tmp/firmware-debs
+          sudo chroot firmware-bootstrap /bin/bash -c "
+            echo 'deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware' > /etc/apt/sources.list
+            apt-get update
+            mkdir -p /tmp/firmware-debs
+            cd /tmp/firmware-debs
+            apt-get download \$(apt-cache depends --recurse --no-recommends --no-suggests \
+              firmware-linux-free firmware-misc-nonfree firmware-realtek \
+              | grep '^\w' | sort -u) 2>/dev/null || true
+            apt-get install -y --no-install-recommends \
+              firmware-linux-free firmware-misc-nonfree firmware-realtek
+            dpkg -l firmware-linux-free firmware-misc-nonfree firmware-realtek
+          "
+
+          # Copy the installed debs out to our cache folder
+          sudo find firmware-bootstrap/var/cache/apt/archives/ -name '*.deb' \
+            -exec cp {} sources/firmware-${{ matrix.arch }}/ \;
+          echo "[*] Cached firmware debs:"
+          ls -lah sources/firmware-${{ matrix.arch }}/
+
+          sudo rm -rf firmware-bootstrap
+
+      ###################################################################### Rootfs apt cache ######################################################################
+      - name: Cache rootfs apt packages
+        uses: actions/cache@v4
+        id: rootfs_cache
+        with:
+          path: sources/rootfs-apt-${{ matrix.arch }}
+          key: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-${{ hashFiles('build/shared_packages.txt', 'build/initrd_packages.txt') }}
+          restore-keys: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-
+
+      - name: Pre-warm rootfs apt cache
+        if: steps.rootfs_cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p sources/rootfs-apt-${{ matrix.arch }}
+
+          sudo rm -rf rootfs-preflight
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            sudo debootstrap --arch=arm64 --variant=minbase --foreign ${DEBIAN_RELEASE} rootfs-preflight ${DEBIAN_MIRROR}
+            sudo cp /usr/bin/qemu-aarch64-static rootfs-preflight/usr/bin/
+            sudo chroot rootfs-preflight /debootstrap/debootstrap --second-stage
+          else
+            sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} rootfs-preflight ${DEBIAN_MIRROR}
+          fi
+
+          sudo cp build/shared_packages.txt rootfs-preflight/root/shared_packages.txt
+          sudo cp build/initrd_packages.txt rootfs-preflight/root/initrd_packages.txt
+
+          sudo chroot rootfs-preflight /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+            echo 'deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware' > /etc/apt/sources.list
+            apt-get update
+            grep -v '^\s*#' /root/shared_packages.txt | grep -v '^\s*$' | tr -d '\r' > /root/install.txt
+            grep -v '^\s*#' /root/initrd_packages.txt | grep -v '^\s*$' | tr -d '\r' >> /root/install.txt
+            apt-get install -y --no-install-recommends \$(cat /root/install.txt)
+          "
+
+          # Pull the downloaded debs into our cache folder
+          sudo find rootfs-preflight/var/cache/apt/archives/ -name '*.deb' \
+            -exec cp {} sources/rootfs-apt-${{ matrix.arch }}/ \;
+          echo "[*] Cached rootfs apt debs: $(ls sources/rootfs-apt-${{ matrix.arch }}/ | wc -l) packages"
+
+          # Write a manifest of what was installed
+          sudo chroot rootfs-preflight /bin/bash -c "dpkg -l" \
+            > sources/rootfs-apt-${{ matrix.arch }}/installed-manifest-${{ matrix.arch }}.txt
+          echo "[*] Manifest written"
+
+          sudo rm -rf rootfs-preflight
+
+      ###################################################################### Summary ######################################################################
+      - name: Preflight summary
+        run: |
+          echo "=================================================="
+          echo "Preflight complete for ${{ matrix.arch }}"
+          echo "=================================================="
+          echo ""
+          echo "Kernel deb: sources/${{ matrix.kernel_deb }}"
+          echo "Firmware cache: sources/firmware-${{ matrix.arch }}/"
+          echo "Rootfs apt cache: sources/rootfs-apt-${{ matrix.arch }}/"
+          echo ""
+          if [ -f "sources/rootfs-apt-${{ matrix.arch }}/installed-manifest-${{ matrix.arch }}.txt" ]; then
+            PKG_COUNT=$(grep -c '^ii' sources/rootfs-apt-${{ matrix.arch }}/installed-manifest-${{ matrix.arch }}.txt || true)
+            echo "Packages in manifest: ${PKG_COUNT}"
+          fi
