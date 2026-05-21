@@ -190,3 +190,4 @@ All console output uses the Solarized dark palette, chosen specifically for
 Built on [Debian Trixie](https://www.debian.org/), [systemd](https://systemd.io/),
 and [iPXE](https://ipxe.org/).
 Inspired by the [Tinkerbell Hook](https://github.com/tinkerbell/hook) project.
+Built at [github.com/knightmare2600/Spejder](https://github.com/knightmare2600/Spejder).
