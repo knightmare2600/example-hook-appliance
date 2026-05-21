@@ -1,9 +1,14 @@
-rootfs/
-initrd-tree/
-firmware-debs/
+!sources/*.deb
+!sources/.gitkeepi
+# sources/ caching
 *.cpio.gz
 *.deb
 *.img
-*.squashfs
 *.log
+*.squashfs
 *.tmp
+firmware-debs/
+initrd-tree/
+rootfs/
+sources/firmware-*/
+sources/rootfs-apt-*/
