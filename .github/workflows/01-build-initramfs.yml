@@ -10,6 +10,8 @@ name: Build Provisioning Runtime
 # 0.1.4 - Add cache restore for kernel deb (from sources/), firmware debs, and rootfs apt packages;
 #          add kernel module count verification; add /init symlink to systemd;
 #          add tree to packages; add autofs4 modprobe alias; fix smbupload.service TTY allocation
+# 0.1.5 - Add SHA256 verification for kernel debs (checksums from packages.debian.org);
+#          detect and reject LFS pointer files in sources/; kernel_sha256 in matrix
 
 on:
   workflow_dispatch: {}
@@ -18,7 +20,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_VERSION: 0.1.4
+  RELEASE_VERSION: 0.1.5
 
 jobs:
 
@@ -35,11 +37,15 @@ jobs:
             kernel_version: 6.12.73+deb13-amd64
             kernel_deb: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
             kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-amd64/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+            # SHA256 from https://packages.debian.org/trixie/amd64/linux-image-6.12.73+deb13-amd64/download
+            kernel_sha256: 1589680329195482fb67cab331c6fc7bb71bd4d4f68fae16b4c5d191636d236f
 
           - arch: arm64
             kernel_version: 6.12.73+deb13-arm64
             kernel_deb: linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
             kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-arm64/linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
+            # SHA256 from https://packages.debian.org/trixie/arm64/linux-image-6.12.73+deb13-arm64/download
+            kernel_sha256: 98fadebbd8d967df37ae5b931c0a8e2720cfceb76a2e1961f6fa3e9141632521
 
     env:
       DEBIAN_RELEASE: trixie
@@ -50,6 +56,8 @@ jobs:
       ###################################################################### Checkout ######################################################################
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       ###################################################################### Build host apt cache ######################################################################
       - name: Restore build host apt cache
@@ -105,30 +113,55 @@ jobs:
           sudo mount --bind /sys rootfs/sys
           sudo mount --bind /dev/pts rootfs/dev/pts
 
-      ###################################################################### Kernel deb - restore from sources/ or download ######################################################################
-      - name: Restore kernel deb from sources/
-        id: kernel_restore
+      ###################################################################### Kernel deb - restore from sources/ or download, always SHA256 verified ######################################################################
+      # Checksums sourced from packages.debian.org - update alongside kernel version bumps
+      # LFS pointer files (< 1MB) are detected and rejected automatically
+      - name: Restore or download kernel deb
         run: |
-          if [ -f "sources/${{ matrix.kernel_deb }}" ]; then
-            echo "[*] Kernel deb found in sources/ - using committed copy"
-            cp "sources/${{ matrix.kernel_deb }}" "${{ matrix.kernel_deb }}"
-            echo "restored=true" >> $GITHUB_OUTPUT
-          else
-            echo "[!] Kernel deb not in sources/ - falling back to download"
-            echo "restored=false" >> $GITHUB_OUTPUT
+          KERNEL_DEB="${{ matrix.kernel_deb }}"
+          KERNEL_URL="${{ matrix.kernel_url }}"
+          EXPECTED_SHA256="${{ matrix.kernel_sha256 }}"
+
+          verify_sha256() {
+            local FILE="$1"
+            local ACTUAL
+            ACTUAL=$(sha256sum "${FILE}" | awk '{print $1}')
+            if [ "${ACTUAL}" = "${EXPECTED_SHA256}" ]; then
+              echo "[*] SHA256 verified: ${FILE}"
+              return 0
+            else
+              echo "[!] SHA256 mismatch on ${FILE}"
+              echo "[!] Expected: ${EXPECTED_SHA256}"
+              echo "[!] Got:      ${ACTUAL}"
+              return 1
+            fi
+          }
+
+          # Check sources/ - reject LFS pointer files and SHA256 mismatches
+          if [ -f "sources/${KERNEL_DEB}" ]; then
+            ACTUAL_SIZE=$(wc -c < "sources/${KERNEL_DEB}")
+            if [ "${ACTUAL_SIZE}" -lt 1000000 ]; then
+              echo "[!] sources/${KERNEL_DEB} is only ${ACTUAL_SIZE} bytes - LFS pointer or corrupt, ignoring"
+            elif verify_sha256 "sources/${KERNEL_DEB}"; then
+              echo "[*] Using verified kernel deb from sources/"
+              cp "sources/${KERNEL_DEB}" "${KERNEL_DEB}"
+            else
+              echo "[!] Rejecting sources/${KERNEL_DEB} - SHA256 mismatch"
+            fi
           fi
 
-      - name: Download kernel deb (fallback)
-        if: steps.kernel_restore.outputs.restored == 'false'
-        run: |
-          wget -O "${{ matrix.kernel_deb }}" "${{ matrix.kernel_url }}"
+          # Download if not resolved from sources/
+          if [ ! -f "${KERNEL_DEB}" ]; then
+            echo "[*] Downloading ${KERNEL_DEB}..."
+            wget -O "${KERNEL_DEB}" "${KERNEL_URL}"
+            if ! verify_sha256 "${KERNEL_DEB}"; then
+              echo "[!] ERROR: downloaded kernel deb failed SHA256 verification - aborting"
+              rm -f "${KERNEL_DEB}"
+              exit 1
+            fi
+          fi
 
-      - name: Verify kernel deb
-        run: |
-          echo "[*] Kernel deb SHA256:"
-          sha256sum "${{ matrix.kernel_deb }}"
-          echo "[*] Kernel deb size:"
-          ls -lah "${{ matrix.kernel_deb }}"
+          echo "[*] Kernel deb ready: $(wc -c < "${KERNEL_DEB}") bytes"
 
       ###################################################################### Firmware deb cache ######################################################################
       - name: Restore firmware deb cache
@@ -306,18 +339,13 @@ jobs:
       ###################################################################### Install /init symlink to systemd ######################################################################
       - name: Install init symlink
         run: |
-          SYSTEMD_PATH=$(sudo readlink -f initrd-tree/lib/systemd/systemd 2>/dev/null \
-            || sudo readlink -f initrd-tree/usr/lib/systemd/systemd 2>/dev/null \
-            || echo "")
-          if [ -z "${SYSTEMD_PATH}" ]; then
-            echo "[!] ERROR: cannot locate systemd binary in initrd-tree"
-            exit 1
-          fi
-          # Make the symlink relative so it works inside the initramfs
           if [ -f "initrd-tree/usr/lib/systemd/systemd" ]; then
             sudo ln -sf /usr/lib/systemd/systemd initrd-tree/init
-          else
+          elif [ -f "initrd-tree/lib/systemd/systemd" ]; then
             sudo ln -sf /lib/systemd/systemd initrd-tree/init
+          else
+            echo "[!] ERROR: cannot locate systemd binary in initrd-tree"
+            exit 1
           fi
           echo "[*] /init symlink:"
           sudo ls -la initrd-tree/init
