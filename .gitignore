@@ -1,14 +1,23 @@
-!sources/*.deb
-!sources/.gitkeepi
-# sources/ caching
+## !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+## !! DO NOT be "HELPFUL" by running sort or :sort in vi on this file. It has !!
+## !! very specific nuances which require this exact order of operations. You !!
+## !! have been warned. En gang til prins Knud! Altid!                        !!
+## !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# Build outputs
 *.cpio.gz
-*.deb
 *.img
 *.log
 *.squashfs
 *.tmp
+
+# Build directories
 firmware-debs/
 initrd-tree/
 rootfs/
+
+# sources/ - ignore cache dirs, but allow committed kernel debs and .gitkeep
 sources/firmware-*/
 sources/rootfs-apt-*/
+
+# Ignore loose debs in the repo root (downloaded during build)
+/*.deb
