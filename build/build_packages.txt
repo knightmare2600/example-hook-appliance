@@ -3,10 +3,13 @@
 # Version history:
 # 0.1.0 - Initial split from packages.txt; previously hardcoded in workflow apt-get line
 # 0.1.1 - Removed localepurge (Debian-only; belongs in initrd_packages.txt not on Ubuntu runner)
+# 0.1.2 - Removed linux-base (must be in initrd chroot as kernel pre-dependency, not on runner)
+# 0.1.3 - Added git-lfs for committing kernel debs >100MB to sources/
 binfmt-support
 cpio
 debootstrap
 dpkg
+git-lfs
 gzip
 initramfs-tools
 qemu-user-static
