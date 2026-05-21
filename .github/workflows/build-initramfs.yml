@@ -7,8 +7,10 @@ name: Build Provisioning Runtime
 # 0.1.2 - Enable non-free-firmware in chroot sources.list before package install;
 #          remove localepurge from build_packages.txt (Debian-only, not on Ubuntu runner)
 # 0.1.3 - Remove Install bootstrap init step; systemd is PID 1, no custom init script required
-# 0.1.4 - No custom init script required, but a symlink is [BUGFIX]
-        
+# 0.1.4 - Add cache restore for kernel deb (from sources/), firmware debs, and rootfs apt packages;
+#          add kernel module count verification; add /init symlink to systemd;
+#          add tree to packages; add autofs4 modprobe alias; fix smbupload.service TTY allocation
+
 on:
   workflow_dispatch: {}
 
@@ -16,7 +18,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_VERSION: 0.1.1
+  RELEASE_VERSION: 0.1.4
 
 jobs:
 
@@ -45,25 +47,32 @@ jobs:
 
     steps:
 
-      ########## Checkout ##########
+      ###################################################################### Checkout ######################################################################
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      ########## Build dependencies ##########
+      ###################################################################### Build host apt cache ######################################################################
+      - name: Restore build host apt cache
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: build-apt-${{ hashFiles('build/build_packages.txt', 'build/shared_packages.txt') }}
+          restore-keys: build-apt-
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y $(grep -v '^\s*#' build/build_packages.txt | grep -v '^\s*$' | tr -d '\r')
           sudo apt-get install -y $(grep -v '^\s*#' build/shared_packages.txt | grep -v '^\s*$' | tr -d '\r')
 
-      ########## Working directories ##########
+      ###################################################################### Working directories ######################################################################
       - name: Create working directories
         run: |
           sudo rm -rf rootfs initrd-tree
           mkdir -p rootfs
           mkdir -p initrd-tree
 
-      ########## Bootstrap Debian ##########
+      ###################################################################### Bootstrap Debian ######################################################################
       - name: Bootstrap Debian rootfs
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
@@ -76,7 +85,7 @@ jobs:
             sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
           fi
 
-      ########## Verify bootstrap ##########
+      ###################################################################### Verify bootstrap ######################################################################
       - name: Verify bootstrap
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -87,7 +96,7 @@ jobs:
             ls -l /bin/bash
           "
 
-      ########## Mount chroot filesystems ##########
+      ###################################################################### Mount chroot filesystems ######################################################################
       - name: Mount chroot filesystems
         run: |
           sudo mount --bind /dev rootfs/dev
@@ -95,14 +104,72 @@ jobs:
           sudo mount --bind /sys rootfs/sys
           sudo mount --bind /dev/pts rootfs/dev/pts
 
-      ########## Download kernel ##########
-      - name: Download kernel package
+      ###################################################################### Kernel deb - restore from sources/ or download ######################################################################
+      - name: Restore kernel deb from sources/
+        id: kernel_restore
         run: |
-          rm -f "${{ matrix.kernel_deb }}"
-          wget -O "${{ matrix.kernel_deb }}" "${{ matrix.kernel_url }}"
-          sha256sum "${{ matrix.kernel_deb }}"
+          if [ -f "sources/${{ matrix.kernel_deb }}" ]; then
+            echo "[*] Kernel deb found in sources/ - using committed copy"
+            cp "sources/${{ matrix.kernel_deb }}" "${{ matrix.kernel_deb }}"
+            echo "restored=true" >> $GITHUB_OUTPUT
+          else
+            echo "[!] Kernel deb not in sources/ - falling back to download"
+            echo "restored=false" >> $GITHUB_OUTPUT
+          fi
 
-      ########## Install shared + initrd packages ##########
+      - name: Download kernel deb (fallback)
+        if: steps.kernel_restore.outputs.restored == 'false'
+        run: |
+          wget -O "${{ matrix.kernel_deb }}" "${{ matrix.kernel_url }}"
+
+      - name: Verify kernel deb
+        run: |
+          echo "[*] Kernel deb SHA256:"
+          sha256sum "${{ matrix.kernel_deb }}"
+          echo "[*] Kernel deb size:"
+          ls -lah "${{ matrix.kernel_deb }}"
+
+      ###################################################################### Firmware deb cache ######################################################################
+      - name: Restore firmware deb cache
+        uses: actions/cache@v4
+        id: firmware_cache
+        with:
+          path: sources/firmware-${{ matrix.arch }}
+          key: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-${{ hashFiles('build/initrd_packages.txt') }}
+          restore-keys: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-
+
+      ###################################################################### Rootfs apt cache ######################################################################
+      - name: Restore rootfs apt cache
+        uses: actions/cache@v4
+        id: rootfs_apt_cache
+        with:
+          path: sources/rootfs-apt-${{ matrix.arch }}
+          key: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-${{ hashFiles('build/shared_packages.txt', 'build/initrd_packages.txt') }}
+          restore-keys: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-
+
+      - name: Seed rootfs apt cache into chroot
+        run: |
+          if [ -d "sources/rootfs-apt-${{ matrix.arch }}" ] && \
+             [ "$(ls -A sources/rootfs-apt-${{ matrix.arch }}/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
+            echo "[*] Seeding $(ls sources/rootfs-apt-${{ matrix.arch }}/*.deb | wc -l) cached debs into chroot apt cache"
+            sudo mkdir -p rootfs/var/cache/apt/archives
+            sudo cp sources/rootfs-apt-${{ matrix.arch }}/*.deb rootfs/var/cache/apt/archives/
+          else
+            echo "[*] No cached rootfs debs found - apt will download fresh"
+          fi
+
+      - name: Seed firmware debs into chroot apt cache
+        run: |
+          if [ -d "sources/firmware-${{ matrix.arch }}" ] && \
+             [ "$(ls -A sources/firmware-${{ matrix.arch }}/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
+            echo "[*] Seeding $(ls sources/firmware-${{ matrix.arch }}/*.deb | wc -l) cached firmware debs into chroot apt cache"
+            sudo mkdir -p rootfs/var/cache/apt/archives
+            sudo cp sources/firmware-${{ matrix.arch }}/*.deb rootfs/var/cache/apt/archives/
+          else
+            echo "[*] No cached firmware debs found - apt will download fresh"
+          fi
+
+      ###################################################################### Install shared + initrd packages ######################################################################
       - name: Install runtime packages
         run: |
           sudo cp build/shared_packages.txt rootfs/root/shared_packages.txt
@@ -117,23 +184,18 @@ jobs:
             apt-get clean
           "
 
-      ########## Apply overlay ##########
+      ###################################################################### Apply overlay ######################################################################
       - name: Apply overlay
         run: |
           sudo rsync -a overlay/ rootfs/
 
-      ########## Fix overlay permissions ##########
+      ###################################################################### Fix overlay permissions ######################################################################
       - name: Fix overlay permissions
         run: |
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
           sudo chmod +x rootfs/usr/local/bin/smbupload.sh
 
-      ########## Make init be SystemD ##########
-      - name: Install init symlink
-        run: |
-          sudo ln -sf /lib/systemd/systemd initrd-tree/init
-
-      ########## Generate locales ##########
+      ###################################################################### Generate locales ######################################################################
       - name: Generate locales
         run: |
           sudo cp shared/locale.gen rootfs/etc/locale.gen
@@ -144,7 +206,7 @@ jobs:
           echo "[*] Verifying generated locale data:"
           sudo ls -lah rootfs/usr/lib/locale/
 
-      ########## Strip locales package (keep generated data) ##########
+      ###################################################################### Strip locales package (keep generated data) ######################################################################
       - name: Strip locales package
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -156,12 +218,12 @@ jobs:
           echo "[*] Verifying locale data survived strip:"
           sudo ls -lah rootfs/usr/lib/locale/
 
-      ########## Generate machine-id ##########
+      ###################################################################### Generate machine-id ######################################################################
       - name: Generate machine-id
         run: |
           sudo systemd-machine-id-setup --root=rootfs
 
-      ########## Install kernel package ##########
+      ###################################################################### Install kernel package ######################################################################
       - name: Install kernel package
         run: |
           sudo cp "${{ matrix.kernel_deb }}" rootfs/root/
@@ -171,18 +233,30 @@ jobs:
             apt-get install -fy
           "
 
-      ########## Generate module dependencies ##########
+      ###################################################################### Verify kernel modules ######################################################################
+      - name: Verify kernel modules
+        run: |
+          MODULE_COUNT=$(sudo find rootfs/lib/modules/ -name '*.ko*' 2>/dev/null | wc -l)
+          echo "[*] Kernel module count: ${MODULE_COUNT}"
+          if [ "${MODULE_COUNT}" -lt 100 ]; then
+            echo "[!] ERROR: only ${MODULE_COUNT} kernel modules found - kernel install likely failed"
+            echo "[!] Expected 100+ .ko files under rootfs/lib/modules/"
+            exit 1
+          fi
+          echo "[*] Kernel module verification passed"
+
+      ###################################################################### Generate module dependencies ######################################################################
       - name: Generate depmod
         run: |
           sudo chroot rootfs depmod -a "${{ matrix.kernel_version }}"
 
-      ########## Remove duplicate boot kernel ##########
+      ###################################################################### Remove duplicate boot kernel ######################################################################
       - name: Remove embedded boot kernel
         run: |
           sudo rm -f rootfs/boot/vmlinuz-* || true
           sudo rm -f rootfs/boot/initrd.img-* || true
 
-      ########## Enable services ##########
+      ###################################################################### Enable services ######################################################################
       - name: Enable services
         run: |
           sudo chroot rootfs systemctl enable ssh || sudo chroot rootfs systemctl enable sshd || true
@@ -192,7 +266,14 @@ jobs:
           sudo chroot rootfs systemctl enable smbupload.service
           sudo chroot rootfs systemctl set-default multi-user.target
 
-      ########## Cleanup ##########
+      ###################################################################### Write installed package manifest ######################################################################
+      - name: Write installed package manifest
+        run: |
+          sudo chroot rootfs /bin/bash -c "dpkg -l" \
+            > rootfs/root/installed-manifest.txt
+          echo "[*] Manifest written - $(grep -c '^ii' rootfs/root/installed-manifest.txt) packages installed"
+
+      ###################################################################### Cleanup ######################################################################
       - name: Cleanup image
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -201,17 +282,8 @@ jobs:
             rm -rf /var/lib/apt/lists/*
             rm -f /root/shared_packages.txt /root/initrd_packages.txt /root/install.txt
           "
-      ########## Verify kernel modules ##########
-      - name: Verify kernel modules
-        run: |
-          MODULE_COUNT=$(find rootfs/lib/modules/ -name '*.ko*' | wc -l)
-          echo "[*] Kernel module count: ${MODULE_COUNT}"
-          if [ "${MODULE_COUNT}" -lt 100 ]; then
-            echo "[!] ERROR: suspiciously few kernel modules - kernel install likely failed"
-            exit 1
-          fi
 
-      ########## Unmount chroot filesystems ##########
+      ###################################################################### Unmount chroot filesystems ######################################################################
       - name: Unmount chroot filesystems
         run: |
           sudo umount rootfs/dev/pts || true
@@ -219,7 +291,7 @@ jobs:
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      ########## Copy rootfs ##########
+      ###################################################################### Copy rootfs ######################################################################
       - name: Copy rootfs
         run: |
           sudo rsync -aHAX --numeric-ids \
@@ -230,7 +302,26 @@ jobs:
             --exclude=/tmp/* \
             rootfs/ initrd-tree/
 
-      ########## Runtime directories ##########
+      ###################################################################### Install /init symlink to systemd ######################################################################
+      - name: Install init symlink
+        run: |
+          SYSTEMD_PATH=$(sudo readlink -f initrd-tree/lib/systemd/systemd 2>/dev/null \
+            || sudo readlink -f initrd-tree/usr/lib/systemd/systemd 2>/dev/null \
+            || echo "")
+          if [ -z "${SYSTEMD_PATH}" ]; then
+            echo "[!] ERROR: cannot locate systemd binary in initrd-tree"
+            exit 1
+          fi
+          # Make the symlink relative so it works inside the initramfs
+          if [ -f "initrd-tree/usr/lib/systemd/systemd" ]; then
+            sudo ln -sf /usr/lib/systemd/systemd initrd-tree/init
+          else
+            sudo ln -sf /lib/systemd/systemd initrd-tree/init
+          fi
+          echo "[*] /init symlink:"
+          sudo ls -la initrd-tree/init
+
+      ###################################################################### Runtime directories ######################################################################
       - name: Create runtime directories
         run: |
           sudo mkdir -p initrd-tree/run
@@ -240,7 +331,7 @@ jobs:
           sudo mkdir -p initrd-tree/var/run/sshd
           sudo mkdir -p initrd-tree/sys/fs/cgroup
 
-      ########## Device nodes ##########
+      ###################################################################### Device nodes ######################################################################
       - name: Create device nodes
         run: |
           sudo mkdir -p initrd-tree/dev
@@ -248,13 +339,13 @@ jobs:
           sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
           sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
 
-      ########## Build initramfs ##########
+      ###################################################################### Build initramfs ######################################################################
       - name: Build initramfs
         run: |
           cd initrd-tree
           sudo find . -print0 | sudo cpio --null -ov --format=newc | sudo gzip -9 | sudo tee ../initramfs-${{ matrix.arch }}.cpio.gz > /dev/null
 
-      ########## Upload artifacts ##########
+      ###################################################################### Upload artifacts ######################################################################
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -263,7 +354,7 @@ jobs:
             initramfs-${{ matrix.arch }}.cpio.gz
             ${{ matrix.kernel_deb }}
 
-      ########## Publish release ##########
+      ###################################################################### Publish release ######################################################################
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
