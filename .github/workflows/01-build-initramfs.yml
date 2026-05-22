@@ -263,9 +263,17 @@ jobs:
           sudo cp "${{ matrix.kernel_deb }}" rootfs/root/
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
-            dpkg --unpack /root/${{ matrix.kernel_deb }}
-            apt-get install -fy
+            echo '[*] Pre-installing kernel dependencies...'
+            apt-get install -y --no-install-recommends linux-base kmod
+            echo '[*] Installing kernel package via dpkg...'
+            dpkg -i /root/${{ matrix.kernel_deb }} || true
+            echo '[*] Resolving any remaining dependencies...'
+            apt-get install -fy --no-install-recommends
+            echo '[*] Verifying kernel package state:'
+            dpkg -l linux-image-6.12.73+deb13-${{ matrix.arch }} || true
           "
+          echo "[*] Module tree from outside chroot:"
+          sudo find rootfs/lib/modules/ -maxdepth 2 -type d 2>/dev/null || echo "No module dirs found"
 
       ###################################################################### Verify kernel modules ######################################################################
       - name: Verify kernel modules
