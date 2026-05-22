@@ -263,14 +263,16 @@ jobs:
           sudo cp "${{ matrix.kernel_deb }}" rootfs/root/
           sudo chroot rootfs /bin/bash -c "
             export DEBIAN_FRONTEND=noninteractive
-            echo '[*] Pre-installing kernel dependencies...'
-            apt-get install -y --no-install-recommends linux-base kmod
-            echo '[*] Installing kernel package via dpkg...'
-            dpkg -i /root/${{ matrix.kernel_deb }} || true
-            echo '[*] Resolving any remaining dependencies...'
-            apt-get install -fy --no-install-recommends
+            echo '[*] Installing initramfs-tools to satisfy kernel dependency...'
+            apt-get install -y --no-install-recommends initramfs-tools
+            echo '[*] Installing kernel package...'
+            dpkg -i /root/${{ matrix.kernel_deb }}
+            echo '[*] Removing initramfs-tools (not needed in final image)...'
+            apt-get remove -y initramfs-tools
+            apt-get autoremove -y
+            apt-get clean
             echo '[*] Verifying kernel package state:'
-            dpkg -l linux-image-6.12.73+deb13-${{ matrix.arch }} || true
+            dpkg -l linux-image-6.12.73+deb13-${{ matrix.arch }}
           "
           echo "[*] Module tree from outside chroot:"
           sudo find rootfs/lib/modules/ -maxdepth 2 -type d 2>/dev/null || echo "No module dirs found"
@@ -311,9 +313,8 @@ jobs:
       ###################################################################### Write installed package manifest ######################################################################
       - name: Write installed package manifest
         run: |
-          sudo chroot rootfs /bin/bash -c "dpkg -l" \
-            > rootfs/root/installed-manifest.txt
-          echo "[*] Manifest written - $(grep -c '^ii' rootfs/root/installed-manifest.txt) packages installed"
+          sudo chroot rootfs /bin/bash -c "dpkg -l" | sudo tee rootfs/root/installed-manifest.txt > /dev/null
+          echo "[*] Manifest written - $(sudo grep -c '^ii' rootfs/root/installed-manifest.txt) packages installed"
 
       ###################################################################### Cleanup ######################################################################
       - name: Cleanup image
