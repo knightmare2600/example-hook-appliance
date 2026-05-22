@@ -140,9 +140,8 @@ jobs:
             exit 1
           fi
 
-          OUT="sourcs/linux-${{ matrix.arch }}"
+          OUT="sources/linux-${{ matrix.arch }}"
           cp "$KERNEL" "$OUT"
-
           echo "[*] Built: $OUT"
           ls -lh "$OUT"
 
