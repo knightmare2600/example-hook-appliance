@@ -325,6 +325,7 @@ jobs:
           sudo chroot rootfs systemctl enable hwcollect.service
           sudo chroot rootfs systemctl enable smbupload.service
           sudo chroot rootfs systemctl set-default multi-user.target
+          sudo chroot rootfs systemctl enable serial-getty@ttyS0.service
 
       ###################################################################### Write installed package manifest ######################################################################
       - name: Write installed package manifest
