@@ -267,10 +267,6 @@ jobs:
             apt-get install -y --no-install-recommends initramfs-tools
             echo '[*] Installing kernel package...'
             dpkg -i /root/${{ matrix.kernel_deb }}
-            echo '[*] Removing initramfs-tools (not needed in final image)...'
-            apt-get remove -y initramfs-tools
-            apt-get autoremove -y
-            apt-get clean
             echo '[*] Verifying kernel package state:'
             dpkg -l linux-image-6.12.73+deb13-${{ matrix.arch }}
           "
@@ -299,6 +295,26 @@ jobs:
         run: |
           sudo rm -f rootfs/boot/vmlinuz-* || true
           sudo rm -f rootfs/boot/initrd.img-* || true
+
+      ###################################################################### Strip initramfs-tools after depmod - bypass postrm hooks to prevent kernel cascade removal ######################################################################
+      # apt-get remove triggers postrm hooks that cascade-remove the kernel via update-initramfs
+      # dpkg --remove --no-triggers bypasses that chain entirely
+      # Modules in /lib/modules/ are NOT owned by initramfs-tools so they survive
+      - name: Strip initramfs-tools
+        run: |
+          sudo chroot rootfs /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+            echo '[*] Stripping initramfs-tools without triggering postrm cascade...'
+            dpkg --remove --force-remove-reinstreq --no-triggers \
+              initramfs-tools initramfs-tools-core initramfs-tools-bin \
+              cpio dracut-install klibc-utils libklibc logsave 2>/dev/null || true
+            apt-get autoremove -y 2>/dev/null || true
+            apt-get clean
+            echo '[*] Verifying kernel still intact:'
+            dpkg -l linux-image-6.12.73+deb13-${{ matrix.arch }} || true
+            echo '[*] Verifying modules still present:'
+            find /lib/modules/ -name '*.ko*' | wc -l
+          "
 
       ###################################################################### Enable services ######################################################################
       - name: Enable services
