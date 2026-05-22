@@ -1,13 +1,12 @@
-name: (Step 02) Build Spejder ISO Images
+name: Build Spejder ISO Images
 
 # Version history:
 # 0.1.0 - Initial ISO build workflow
 # 0.1.1 - Add AMD64 BIOS+UEFI hybrid ISO support via grub-mkrescue
 # 0.1.2 - Add ARM64 UEFI ISO support
 # 0.1.3 - Add artifact uploads and GitHub release publishing
-# 0.1.4 - Add ISO verification and prettier build logging
-# 0.1.5 - Simplify runtime asset handling; kernels/initramfs sourced directly from repository
-# 0.1.6 - Fix GitHub Actions matrix/env expansion ordering issue
+# 0.1.4 - Extract kernels directly from verified Debian kernel packages
+# 0.1.5 - Add ISO verification and prettier logging
 
 on:
   workflow_dispatch: {}
@@ -16,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_VERSION: 0.1.6
+  RELEASE_VERSION: 0.1.5
 
 jobs:
 
@@ -32,10 +31,11 @@ jobs:
 
           ###################################################################### AMD64 ######################################################################
           - arch: amd64
+
             iso_basename: spejder-amd64
 
-            kernel_file: build/linux-amd64
-            initrd_file: build/initramfs-amd64.cpio.gz
+            kernel_deb: sources/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
+            initrd_file: initramfs-amd64.cpio.gz
 
             serial_console: ttyS0
 
@@ -45,10 +45,11 @@ jobs:
 
           ###################################################################### ARM64 ######################################################################
           - arch: arm64
+
             iso_basename: spejder-arm64
 
-            kernel_file: build/linux-arm64
-            initrd_file: build/initramfs-arm64.cpio.gz
+            kernel_deb: sources/linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
+            initrd_file: initramfs-arm64.cpio.gz
 
             serial_console: ttyAMA0
 
@@ -71,32 +72,70 @@ jobs:
       ###################################################################### Install build dependencies ######################################################################
       - name: Install ISO build dependencies
         run: |
-          echo "[*] Installing GRUB and ISO tooling..."
+          echo "[*] Installing ISO build dependencies..."
+
           sudo apt-get update
-          sudo apt-get install -y xorriso mtools grub-common grub2-common ${{ matrix.grub_packages }}
+
+          sudo apt-get install -y \
+            xorriso \
+            mtools \
+            grub-common \
+            grub2-common \
+            dpkg-dev \
+            ${{ matrix.grub_packages }}
 
       ###################################################################### Verify runtime assets ######################################################################
       - name: Verify runtime assets
         run: |
-          echo "[*] Verifying kernel and initramfs presence..."
-          test -f "${{ matrix.kernel_file }}"
+          echo "[*] Verifying runtime assets..."
+
+          test -f "${{ matrix.kernel_deb }}"
           test -f "${{ matrix.initrd_file }}"
 
           echo
-          echo "=== KERNEL ==="
-          ls -lh "${{ matrix.kernel_file }}"
+          echo "=== KERNEL DEB ==="
+          ls -lh "${{ matrix.kernel_deb }}"
 
           echo
           echo "=== INITRAMFS ==="
           ls -lh "${{ matrix.initrd_file }}"
 
+      ###################################################################### Extract kernel from Debian package ######################################################################
+      - name: Extract kernel image
+        run: |
+          echo "[*] Extracting kernel from Debian package..."
+
+          rm -rf kernel-extract
+          mkdir -p kernel-extract
+
+          dpkg-deb -x "${{ matrix.kernel_deb }}" kernel-extract
+
+          echo
+          echo "=== EXTRACTED BOOT CONTENTS ==="
+          find kernel-extract/boot -type f
+
+          KERNEL_PATH=$(find kernel-extract/boot -name 'vmlinuz-*' | head -n1)
+
+          if [ -z "${KERNEL_PATH}" ]; then
+            echo "[!] ERROR: unable to locate kernel image"
+            exit 1
+          fi
+
+          cp "${KERNEL_PATH}" "linux-${{ matrix.arch }}"
+
+          echo
+          echo "=== EXTRACTED KERNEL ==="
+          ls -lh "linux-${{ matrix.arch }}"
+
       ###################################################################### Create ISO tree ######################################################################
       - name: Create ISO tree
         run: |
-          echo "[*] Creating ISO filesystem layout..."
+          echo "[*] Creating ISO filesystem tree..."
+
           rm -rf iso
           mkdir -p iso/boot/grub
-          cp "${{ matrix.kernel_file }}" iso/linux
+
+          cp "linux-${{ matrix.arch }}" iso/linux
           cp "${{ matrix.initrd_file }}" iso/
 
       ###################################################################### Generate GRUB configuration ######################################################################
@@ -109,8 +148,16 @@ jobs:
           set default=0
 
           menuentry "Spejder Debian Hardware Provisioning Runtime (${{ matrix.arch }})" {
-            linux /linux console=${{ matrix.serial_console }},115200 console=tty0 rw net.ifnames=0 biosdevname=0 quiet
-            initrd /$(basename "${{ matrix.initrd_file }}")
+
+              linux /linux \\
+                  console=${{ matrix.serial_console }},115200 \\
+                  console=tty0 \\
+                  rw \\
+                  net.ifnames=0 \\
+                  biosdevname=0 \\
+                  quiet
+
+              initrd /$(basename "${{ matrix.initrd_file }}")
           }
           EOF
 
@@ -122,7 +169,11 @@ jobs:
       - name: Build ISO image
         run: |
           echo "[*] Building bootable ISO..."
-          grub-mkrescue -volid "SPEJDER_${{ matrix.arch }}" -o "${ISO_NAME}" iso/
+
+          grub-mkrescue \
+            -volid "SPEJDER_${{ matrix.arch }}" \
+            -o "${ISO_NAME}" \
+            iso/
 
       ###################################################################### Verify ISO ######################################################################
       - name: Verify ISO image
