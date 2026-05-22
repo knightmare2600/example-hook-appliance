@@ -125,6 +125,28 @@ jobs:
           echo "[*] SHA256 verified: ${ACTUAL_SHA256}"
           echo "[*] Size: $(wc -c < "sources/${KERNEL_DEB}") bytes"
 
+      ###################################################################### Extract kernel ONLY after verification ######################################################################
+      - name: Extract kernel binary
+        run: |
+          echo "[*] Extracting kernel..."
+          rm -rf extract
+          mkdir extract
+          dpkg-deb -x "sources/${{ matrix.kernel_deb }}" extract
+
+          KERNEL=$(find extract/boot -type f -name "vmlinuz-*" | head -n 1)
+
+          if [ -z "$KERNEL" ]; then
+            echo "❌ No kernel found inside deb"
+            exit 1
+          fi
+
+          OUT="sourcs/linux-${{ matrix.arch }}"
+          cp "$KERNEL" "$OUT"
+
+          echo "[*] Built: $OUT"
+          ls -lh "$OUT"
+
+
       - name: Commit kernel deb to sources/ via Git LFS
         if: steps.kernel_check.outputs.needs_download == 'true'
         run: |
@@ -132,6 +154,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git lfs install
           git add -f "sources/${{ matrix.kernel_deb }}"
+          git add -f "sources/linux-${{ matrix.arch }}"
           git commit -m "preflight: add kernel deb ${{ matrix.kernel_deb }} (SHA256 verified)"
           git push
         env:
@@ -164,13 +187,11 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             echo 'deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware' > /etc/apt/sources.list
             apt-get update
-            apt-get install -y --no-install-recommends \
-              firmware-linux-free firmware-misc-nonfree firmware-realtek
+            apt-get install -y --no-install-recommends firmware-linux-free firmware-misc-nonfree firmware-realtek
             apt-get clean
           "
 
-          sudo find firmware-bootstrap/var/cache/apt/archives/ -name '*.deb' \
-            -exec cp {} sources/firmware-${{ matrix.arch }}/ \;
+          sudo find firmware-bootstrap/var/cache/apt/archives/ -name '*.deb' -exec cp {} sources/firmware-${{ matrix.arch }}/ \;
           echo "[*] Cached $(ls sources/firmware-${{ matrix.arch }}/*.deb | wc -l) firmware debs"
           sudo rm -rf firmware-bootstrap
 
