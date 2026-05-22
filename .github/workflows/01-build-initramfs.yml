@@ -354,13 +354,7 @@ jobs:
       ###################################################################### Copy rootfs ######################################################################
       - name: Copy rootfs
         run: |
-          sudo rsync -aHAX --numeric-ids \
-            --exclude=/proc/* \
-            --exclude=/sys/* \
-            --exclude=/dev/* \
-            --exclude=/run/* \
-            --exclude=/tmp/* \
-            rootfs/ initrd-tree/
+          sudo rsync -aHAX --numeric-ids --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/* --exclude=/tmp/* rootfs/ initrd-tree/
 
       ###################################################################### Install /init symlink to systemd ######################################################################
       - name: Install init symlink
@@ -407,8 +401,9 @@ jobs:
           name: initramfs-${{ matrix.arch }}
           path: |
             initramfs-${{ matrix.arch }}.cpio.gz
+            linux-${{ matrix.arch }}
             ${{ matrix.kernel_deb }}
-
+   
       ###################################################################### Publish release ######################################################################
       - name: Publish release
         uses: softprops/action-gh-release@v2
