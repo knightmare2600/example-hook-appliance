@@ -3,7 +3,8 @@ Description=Spejder SMB Inventory Upload
 # Version history:
 # 0.1.0 - Initial service
 # 0.2.0 - Add TTY allocation for interactive credential prompt
-After=hwcollect.service
+# 0.3.0 - Run after getty is up; dedicated TTY to prevent boot message stomping
+After=hwcollect.service getty@tty1.service
 Requires=hwcollect.service
 
 [Service]
@@ -13,6 +14,8 @@ StandardInput=tty
 TTYPath=/dev/tty1
 StandardOutput=tty
 StandardError=tty
+TTYVHangup=yes
+TTYVTDisallocate=no
 RemainAfterExit=yes
 
 [Install]
