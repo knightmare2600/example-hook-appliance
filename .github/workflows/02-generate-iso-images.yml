@@ -1,4 +1,4 @@
-name: Build Spejder ISO Images
+name: (Step 01) Build Spejder ISO Images
 
 # Version history:
 # 0.1.0 - Initial ISO build workflow
