@@ -1,0 +1,18 @@
+[Unit]
+Description=Spejder Dynamic Hostname (spejder-<mac>)
+# Version history:
+# 0.1.0 - Initial service
+# Runs after udev has settled so eth0 address is readable from sysfs
+# Runs before network-online so the correct hostname is set before DHCP
+After=systemd-udev-settle.service
+Before=network-online.target systemd-networkd.service hwcollect.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/spejder-hostname.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
