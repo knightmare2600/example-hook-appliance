@@ -1,0 +1,2 @@
+# Machine generated file. Use "minicom -s" to chage parameters
+pu port             /dev/ttyS0
