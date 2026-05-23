@@ -1,0 +1,20 @@
+[Unit]
+Description=Spejder Keyboard Layout Selection
+# Version history:
+# 0.1.0 - Initial service
+# Interactive - runs on tty1 after getty is up
+# User has 10 seconds to request layout change, otherwise defaults to British
+After=getty@tty1.service spejder-hostname.service
+Requires=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/spejder-keyboard.sh
+StandardInput=tty
+TTYPath=/dev/tty1
+StandardOutput=tty
+StandardError=tty
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
