@@ -1,8 +1,9 @@
-# /etc/securetty - terminals on which root is allowed to login
+# /etc/securetty - terminals permitted for root login
 # Version history:
 # 0.1.0 - Initial file for Spejder provisioning runtime
 console
 tty1
 tty2
+tty3
 ttyS0
 ttyS1
