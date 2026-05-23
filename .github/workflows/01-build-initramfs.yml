@@ -473,23 +473,34 @@ jobs:
           sudo find . -print0 | sudo cpio --null -ov --format=newc | sudo zstd -19 -T0 | sudo tee ../initramfs-${{ matrix.arch }}.cpio.zst > /dev/null
           echo "[*] initramfs size: $(ls -lh ../initramfs-${{ matrix.arch }}.cpio.zst | awk '{print $5}')"
 
+      ###################################################################### Organise artifacts into spejder/${arch}/ structure ######################################################################
+      - name: Organise artifacts
+        run: |
+          mkdir -p spejder/${{ matrix.arch }}
+          cp initramfs-${{ matrix.arch }}.cpio.zst spejder/${{ matrix.arch }}/
+          cp linux-${{ matrix.arch }} spejder/${{ matrix.arch }}/
+          echo "[*] Artifact layout:"
+          ls -lh spejder/${{ matrix.arch }}/
+
       ###################################################################### Upload artifacts ######################################################################
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: initramfs-${{ matrix.arch }}
           path: |
-            initramfs-${{ matrix.arch }}.cpio.zst
-            linux-${{ matrix.arch }}
+            spejder/${{ matrix.arch }}/linux-${{ matrix.arch }}
+            spejder/${{ matrix.arch }}/initramfs-${{ matrix.arch }}.cpio.zst
 
       ###################################################################### Publish release ######################################################################
       # Publishes initramfs and extracted kernel binary - everything needed for iPXE or manual boot
+      # Files are published flat in the release (GitHub releases don't support subdirectories)
+      # but named with arch suffix so they're unambiguous
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
           files: |
-            initramfs-${{ matrix.arch }}.cpio.zst
-            linux-${{ matrix.arch }}
+            spejder/${{ matrix.arch }}/initramfs-${{ matrix.arch }}.cpio.zst
+            spejder/${{ matrix.arch }}/linux-${{ matrix.arch }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
