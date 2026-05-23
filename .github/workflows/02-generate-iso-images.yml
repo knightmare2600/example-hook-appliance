@@ -33,16 +33,12 @@ jobs:
           ###################################################################### AMD64 ######################################################################
           - arch: amd64
             iso_basename: spejder-amd64
-            kernel_deb: sources/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
-            initrd_file: initramfs-amd64.cpio.zst
             serial_console: ttyS0
             grub_packages: grub-pc-bin grub-efi-amd64-bin
 
           ###################################################################### ARM64 ######################################################################
           - arch: arm64
             iso_basename: spejder-arm64
-            kernel_deb: sources/linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
-            initrd_file: initramfs-arm64.cpio.zst
             serial_console: ttyAMA0
             grub_packages: grub-efi-arm64-bin
 
@@ -109,35 +105,26 @@ jobs:
       - name: Verify runtime assets
         run: |
           echo "[*] Verifying runtime assets..."
-          test -f "${{ matrix.kernel_deb }}" || { echo "[!] ERROR: kernel deb not found at ${{ matrix.kernel_deb }}"; exit 1; }
-          test -f "${{ matrix.initrd_file }}" || { echo "[!] ERROR: initramfs not found: ${{ matrix.initrd_file }}"; exit 1; }
+          INITRD="spejder/${{ matrix.arch }}/${{ matrix.initrd_file }}"
+          KERNEL="spejder/${{ matrix.arch }}/linux-${{ matrix.arch }}"
+          test -f "${INITRD}" || { echo "[!] ERROR: initramfs not found at ${INITRD}"; exit 1; }
+          test -f "${KERNEL}" || { echo "[!] ERROR: kernel not found at ${KERNEL}"; exit 1; }
           echo ""
-          echo "=== KERNEL DEB ==="
-          ls -lh "${{ matrix.kernel_deb }}"
+          echo "=== KERNEL ==="
+          ls -lh "${KERNEL}"
           echo ""
           echo "=== INITRAMFS ==="
-          ls -lh "${{ matrix.initrd_file }}"
+          ls -lh "${INITRD}"
+          # Export paths for subsequent steps
+          echo "INITRD_PATH=${INITRD}" >> $GITHUB_ENV
+          echo "KERNEL_PATH=${KERNEL}" >> $GITHUB_ENV
 
       ###################################################################### Extract kernel image ######################################################################
-      # Uses pre-extracted binary from sources/ if available, otherwise extracts from deb
+      # Uses pre-extracted binary from artifact - no need to unpack the deb again
       - name: Extract kernel image
         run: |
-          KERNEL_BINARY="sources/linux-${{ matrix.arch }}"
-          if [ -f "${KERNEL_BINARY}" ]; then
-            echo "[*] Using pre-extracted kernel binary from sources/"
-            cp "${KERNEL_BINARY}" "linux-${{ matrix.arch }}"
-          else
-            echo "[*] Extracting kernel from Debian package..."
-            rm -rf kernel-extract && mkdir -p kernel-extract
-            dpkg-deb -x "${{ matrix.kernel_deb }}" kernel-extract
-            KERNEL_PATH=$(find kernel-extract/boot -name 'vmlinuz-*' | head -n1)
-            if [ -z "${KERNEL_PATH}" ]; then
-              echo "[!] ERROR: unable to locate kernel image"
-              exit 1
-            fi
-            cp "${KERNEL_PATH}" "linux-${{ matrix.arch }}"
-            rm -rf kernel-extract
-          fi
+          echo "[*] Using kernel binary from artifact..."
+          cp "${KERNEL_PATH}" "linux-${{ matrix.arch }}"
           echo ""
           echo "=== KERNEL ==="
           ls -lh "linux-${{ matrix.arch }}"
@@ -149,11 +136,12 @@ jobs:
           rm -rf iso
           mkdir -p iso/boot/grub
           cp "linux-${{ matrix.arch }}" iso/linux
-          cp "${{ matrix.initrd_file }}" iso/
+          cp "${INITRD_PATH}" iso/
 
       ###################################################################### Generate GRUB configuration ######################################################################
       - name: Generate grub.cfg
         run: |
+          INITRD_FILENAME=$(basename "${INITRD_PATH}")
           echo "[*] Generating GRUB configuration..."
           cat > iso/boot/grub/grub.cfg << EOF
           set timeout=5
@@ -167,7 +155,7 @@ jobs:
                   net.ifnames=0 \
                   biosdevname=0 \
                   quiet
-              initrd /$(basename "${{ matrix.initrd_file }}")
+              initrd /${INITRD_FILENAME}
           }
 
           menuentry "Spejder - Verbose boot (${{ matrix.arch }})" {
@@ -177,7 +165,7 @@ jobs:
                   rw \
                   net.ifnames=0 \
                   biosdevname=0
-              initrd /$(basename "${{ matrix.initrd_file }}")
+              initrd /${INITRD_FILENAME}
           }
           EOF
           echo ""
