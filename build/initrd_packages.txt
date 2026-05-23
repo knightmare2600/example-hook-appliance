@@ -10,6 +10,7 @@ ethtool
 firmware-linux-free
 firmware-misc-nonfree
 firmware-realtek
+gpm
 haveged
 ipmitool
 iproute2
