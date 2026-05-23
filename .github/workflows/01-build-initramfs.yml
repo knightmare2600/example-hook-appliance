@@ -10,8 +10,11 @@ name: (Step 01) Build Provisioning Runtime
 # 0.1.4 - Add cache restore for kernel deb (from sources/), firmware debs, and rootfs apt packages;
 #          add kernel module count verification; add /init symlink to systemd;
 #          add tree to packages; add autofs4 modprobe alias; fix smbupload.service TTY allocation
-# 0.1.5 - Add SHA256 verification for kernel debs (checksums from packages.debian.org);
-#          detect and reject LFS pointer files in sources/; kernel_sha256 in matrix
+# 0.1.5 - Add SHA256 verification for kernel debs; detect and reject LFS pointer files;
+#          kernel_sha256 in matrix; initramfs-tools install/strip pattern for kernel dep;
+#          cleanup: remove kernel deb from /root, localepurge, strip man/doc
+# 0.1.6 - Add LFS storage safety valve; enable serial-getty@ttyS0;
+#          publish extracted kernel binary in release; sudo tee for manifest write
 
 on:
   workflow_dispatch: {}
@@ -20,7 +23,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_VERSION: 0.1.5
+  RELEASE_VERSION: 0.1.6
 
 jobs:
 
@@ -58,6 +61,33 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
+
+      ###################################################################### LFS storage safety valve ######################################################################
+      # Exit early if Git LFS storage is approaching the 1GB free tier limit
+      - name: Check Git LFS storage usage
+        run: |
+          echo "[*] Checking Git LFS storage usage..."
+          LFS_BYTES=$(git lfs ls-files -s 2>/dev/null | awk '{
+            val=$NF; unit=$(NF-1)
+            if (unit == "MB") val=val*1024*1024
+            else if (unit == "GB") val=val*1024*1024*1024
+            else if (unit == "KB") val=val*1024
+            sum+=val
+          } END {printf "%.0f", sum}')
+          LFS_MB=$((LFS_BYTES / 1024 / 1024))
+          echo "[*] Current LFS usage: ${LFS_MB} MB"
+          if [ "${LFS_MB}" -gt 900 ]; then
+            echo ""
+            echo "============================================================"
+            echo "WARNING: Git LFS storage is ${LFS_MB} MB - approaching 1GB limit"
+            echo "Free tier limit is 1GB. Please:"
+            echo "  1. Remove old kernel debs from sources/ with git rm"
+            echo "  2. Run: git lfs prune"
+            echo "  3. Push the cleanup before running this workflow again"
+            echo "============================================================"
+            exit 1
+          fi
+          echo "[*] LFS storage OK (${LFS_MB} MB / 900 MB threshold)"
 
       ###################################################################### Build host apt cache ######################################################################
       - name: Restore build host apt cache
@@ -162,6 +192,28 @@ jobs:
           fi
 
           echo "[*] Kernel deb ready: $(wc -c < "${KERNEL_DEB}") bytes"
+
+      ###################################################################### Extract kernel binary for release publishing ######################################################################
+      # Uses pre-extracted binary from sources/ if available (put there by preflight)
+      # Falls back to extracting from deb if needed
+      - name: Extract kernel binary
+        run: |
+          if [ -f "sources/linux-${{ matrix.arch }}" ]; then
+            echo "[*] Using pre-extracted kernel binary from sources/"
+            cp "sources/linux-${{ matrix.arch }}" "linux-${{ matrix.arch }}"
+          else
+            echo "[*] Extracting kernel binary from deb..."
+            rm -rf extract && mkdir extract
+            dpkg-deb -x "${{ matrix.kernel_deb }}" extract
+            KERNEL=$(find extract/boot -type f -name "vmlinuz-*" | head -n1)
+            if [ -z "${KERNEL}" ]; then
+              echo "[!] ERROR: no vmlinuz found inside deb"
+              exit 1
+            fi
+            cp "${KERNEL}" "linux-${{ matrix.arch }}"
+            rm -rf extract
+          fi
+          echo "[*] Kernel binary: $(ls -lh linux-${{ matrix.arch }})"
 
       ###################################################################### Firmware deb cache ######################################################################
       - name: Restore firmware deb cache
@@ -341,13 +393,13 @@ jobs:
             apt-get clean
             rm -rf /var/lib/apt/lists/*
             rm -f /root/shared_packages.txt /root/initrd_packages.txt /root/install.txt
-            echo '[*] Removing kernel deb from /root (103MB saving)...'
+            echo '[*] Removing kernel deb from /root (~103MB saving)...'
             rm -f /root/linux-image-*.deb
-            echo '[*] Running localepurge (keep en_GB, da_DK, de_DE)...'
+            echo '[*] Running localepurge (keeping en_GB, da_DK, de_DE)...'
             localepurge
             echo '[*] Stripping man pages...'
             rm -rf /usr/share/man
-            echo '[*] Stripping remaining docs...'
+            echo '[*] Stripping docs...'
             rm -rf /usr/share/doc
             echo '[*] Final rootfs size breakdown:'
             du -h --max-depth=1 / 2>/dev/null | sort -rh | head -20
@@ -409,6 +461,7 @@ jobs:
         run: |
           cd initrd-tree
           sudo find . -print0 | sudo cpio --null -ov --format=newc | sudo gzip -9 | sudo tee ../initramfs-${{ matrix.arch }}.cpio.gz > /dev/null
+          echo "[*] initramfs size: $(ls -lh ../initramfs-${{ matrix.arch }}.cpio.gz | awk '{print $5}')"
 
       ###################################################################### Upload artifacts ######################################################################
       - name: Upload artifacts
@@ -417,15 +470,16 @@ jobs:
           name: initramfs-${{ matrix.arch }}
           path: |
             initramfs-${{ matrix.arch }}.cpio.gz
-            ${{ matrix.kernel_deb }}
+            linux-${{ matrix.arch }}
 
       ###################################################################### Publish release ######################################################################
+      # Publishes initramfs and extracted kernel binary - everything needed for iPXE or manual boot
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
           files: |
             initramfs-${{ matrix.arch }}.cpio.gz
-            ${{ matrix.kernel_deb }}
+            linux-${{ matrix.arch }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
