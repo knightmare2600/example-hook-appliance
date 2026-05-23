@@ -37,6 +37,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
+            ipxe_arch: x86_64
             kernel_version: 6.12.73+deb13-amd64
             kernel_deb: linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
             kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-amd64/linux-image-6.12.73+deb13-amd64_6.12.73-1_amd64.deb
@@ -44,6 +45,7 @@ jobs:
             kernel_sha256: 1589680329195482fb67cab331c6fc7bb71bd4d4f68fae16b4c5d191636d236f
 
           - arch: arm64
+            ipxe_arch: arm64
             kernel_version: 6.12.73+deb13-arm64
             kernel_deb: linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
             kernel_url: http://ftp.dk.debian.org/debian/pool/main/l/linux-signed-arm64/linux-image-6.12.73+deb13-arm64_6.12.73-1_arm64.deb
@@ -473,14 +475,14 @@ jobs:
           sudo find . -print0 | sudo cpio --null -ov --format=newc | sudo zstd -19 -T0 | sudo tee ../initramfs-${{ matrix.arch }}.cpio.zst > /dev/null
           echo "[*] initramfs size: $(ls -lh ../initramfs-${{ matrix.arch }}.cpio.zst | awk '{print $5}')"
 
-      ###################################################################### Organise artifacts into spejder/${arch}/ structure ######################################################################
+      ###################################################################### Organise artifacts into spejder/${ipxe_arch}/ structure ######################################################################
       - name: Organise artifacts
         run: |
-          mkdir -p spejder/${{ matrix.arch }}
-          cp initramfs-${{ matrix.arch }}.cpio.zst spejder/${{ matrix.arch }}/
-          cp linux-${{ matrix.arch }} spejder/${{ matrix.arch }}/
+          mkdir -p spejder/${{ matrix.ipxe_arch }}
+          cp initramfs-${{ matrix.arch }}.cpio.zst spejder/${{ matrix.ipxe_arch }}/initramfs-${{ matrix.ipxe_arch }}.cpio.zst
+          cp linux-${{ matrix.arch }} spejder/${{ matrix.ipxe_arch }}/linux-${{ matrix.ipxe_arch }}
           echo "[*] Artifact layout:"
-          ls -lh spejder/${{ matrix.arch }}/
+          ls -lh spejder/${{ matrix.ipxe_arch }}/
 
       ###################################################################### Upload artifacts ######################################################################
       - name: Upload artifacts
@@ -488,19 +490,16 @@ jobs:
         with:
           name: initramfs-${{ matrix.arch }}
           path: |
-            spejder/${{ matrix.arch }}/linux-${{ matrix.arch }}
-            spejder/${{ matrix.arch }}/initramfs-${{ matrix.arch }}.cpio.zst
+            spejder/${{ matrix.ipxe_arch }}/linux-${{ matrix.ipxe_arch }}
+            spejder/${{ matrix.ipxe_arch }}/initramfs-${{ matrix.ipxe_arch }}.cpio.zst
 
       ###################################################################### Publish release ######################################################################
-      # Publishes initramfs and extracted kernel binary - everything needed for iPXE or manual boot
-      # Files are published flat in the release (GitHub releases don't support subdirectories)
-      # but named with arch suffix so they're unambiguous
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
           files: |
-            spejder/${{ matrix.arch }}/initramfs-${{ matrix.arch }}.cpio.zst
-            spejder/${{ matrix.arch }}/linux-${{ matrix.arch }}
+            spejder/${{ matrix.ipxe_arch }}/initramfs-${{ matrix.ipxe_arch }}.cpio.zst
+            spejder/${{ matrix.ipxe_arch }}/linux-${{ matrix.ipxe_arch }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
