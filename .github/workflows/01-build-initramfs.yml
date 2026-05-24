@@ -387,6 +387,12 @@ jobs:
           sudo chroot rootfs systemctl enable spejder-hostname.service
           sudo chroot rootfs systemctl enable spejder-keyboard.service
           sudo chroot rootfs systemctl set-default multi-user.target
+          sudo chroot rootfs systemctl mask apt-daily.timer
+          sudo chroot rootfs systemctl mask apt-daily-upgrade.timer
+          sudo chroot rootfs systemctl mask dpkg-db-backup.timer
+          sudo chroot rootfs systemctl mask fstrim.timer
+          sudo chroot rootfs systemctl mask ldconfig.service
+          sudo chroot rootfs systemctl mask systemd-firstboot.service
 
       ###################################################################### Write installed package manifest ######################################################################
       - name: Write installed package manifest
