@@ -1,10 +1,13 @@
 #!ipxe
+# Spejder - Hardware Provisioning Runtime
+# Version history:
+# 0.1.0 - Initial
+# 0.2.0 - Renamed cowboy to spejder
+# 0.3.0 - zstd initramfs
+# 0.4.0 - Arch-aware paths under spejder/${deb_arch}/
 
-cpuid --ext 29 && set arch amd64 || set arch arm64
+iseq ${arch} arm64 && set deb_arch arm64 || set deb_arch amd64
 
-set base http://192.168.139.50/hook/${arch}
-
-kernel ${base}/hook-kernel initrd=hook-initrd.img console=tty0 console=ttyS0
-initrd ${base}/hook-initrd.img
-
+kernel ${boot-url}/spejder/${deb_arch}/linux-${deb_arch} console=ttyS0,115200 console=tty0 rw net.ifnames=0 biosdevname=0 quiet
+initrd ${boot-url}/spejder/${deb_arch}/initramfs-${deb_arch}.cpio.zst
 boot
