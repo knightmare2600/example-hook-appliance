@@ -1,6 +1,8 @@
 # Packages installed inside the initrd image only
 # Version history:
 # 0.1.0 - Initial split from packages.txt
+# 0.1.1 - Added linux-base (kernel pre-dependency; must exist in chroot before dpkg -i kernel)
+# 0.1.2 - Added console-setup and keyboard-configuration for spejder-keyboard.sh
 cifs-utils
 console-setup
 dbus
@@ -11,7 +13,6 @@ ethtool
 firmware-linux-free
 firmware-misc-nonfree
 firmware-realtek
-gpm
 haveged
 ipmitool
 iproute2
@@ -25,6 +26,7 @@ localepurge
 login
 lshw
 mdadm
+minicom
 mount
 net-tools
 nvme-cli
