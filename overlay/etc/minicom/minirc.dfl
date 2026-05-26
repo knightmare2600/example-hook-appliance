@@ -1,2 +1,13 @@
-# Machine generated file. Use "minicom -s" to chage parameters
+# /etc/minicom/minirc.dfl
+# Spejder default minicom configuration
+# Version history:
+# 0.1.0 - Initial config - 115200 8N1, ttyS0, no hardware flow control
 pu port             /dev/ttyS0
+pu baudrate         115200
+pu bits             8
+pu parity           N
+pu stopbits         1
+pu rtscts           No
+pu xonxoff          No
+pu linewrap         Yes
+pu addcarreturn     Yes
