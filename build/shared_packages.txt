@@ -4,7 +4,6 @@
 bash
 ca-certificates
 curl
-initramfs-tools
 jq
 locales
 wget
