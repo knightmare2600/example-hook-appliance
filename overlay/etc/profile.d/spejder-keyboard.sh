@@ -1,9 +1,10 @@
 #!/bin/bash
 # /etc/profile.d/spejder-keyboard.sh
-# Runs on first login to tty1 - offers keyboard layout selection. Defaults to British (gb) after 10 seconds
+# Runs on first login to tty1 - offers keyboard layout selection
+# Defaults to British (gb) after 10 seconds
 # Version history:
-# 0.1.0 - Initial - moved from systemd service to profile.d to avoid TTY/HUP issues Only runs on tty1 to
-#avoid triggering on SSH sessions
+# 0.1.0 - Initial - moved from systemd service to profile.d to avoid TTY/HUP issues
+#          Only runs on tty1 to avoid triggering on SSH sessions
 
 # Only run on tty1, only on first login (check flag file)
 [ "$(tty)" = "/dev/tty1" ] || exit 0
