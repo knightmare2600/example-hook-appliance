@@ -16,7 +16,8 @@ permissions:
   contents: write
 
 env:
-  RELEASE_VERSION: 0.1.6
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RELEASE_VERSION: 0.1.7
 
 jobs:
 
@@ -30,14 +31,14 @@ jobs:
       matrix:
         include:
 
-          ###################################################################### AMD64 ######################################################################
+          ########## AMD64 ##########
           - arch: amd64
             ipxe_arch: x86_64
             iso_basename: spejder-amd64
             serial_console: ttyS0
             grub_packages: grub-pc-bin grub-efi-amd64-bin
 
-          ###################################################################### ARM64 ######################################################################
+          ########## ARM64 ##########
           - arch: arm64
             ipxe_arch: arm64
             iso_basename: spejder-arm64
@@ -46,13 +47,13 @@ jobs:
 
     steps:
 
-      ###################################################################### Checkout ######################################################################
+      ########## Checkout ##########
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           lfs: true
 
-      ###################################################################### LFS storage safety valve ######################################################################
+      ########## LFS storage safety valve ##########
       # Exit early if Git LFS storage is approaching the 1GB free tier limit
       - name: Check Git LFS storage usage
         run: |
@@ -79,25 +80,25 @@ jobs:
           fi
           echo "[*] LFS storage OK (${LFS_MB} MB / 900 MB threshold)"
 
-      ###################################################################### Define ISO filename ######################################################################
+      ########## Define ISO filename ##########
       - name: Define ISO filename
         run: |
           echo "ISO_NAME=${{ matrix.iso_basename }}-${RELEASE_VERSION}.iso" >> $GITHUB_ENV
 
-      ###################################################################### Install build dependencies ######################################################################
+      ########## Install build dependencies ##########
       - name: Install ISO build dependencies
         run: |
           echo "[*] Installing ISO build dependencies..."
           sudo apt-get update
           sudo apt-get install -y xorriso mtools grub-common grub2-common dpkg-dev ${{ matrix.grub_packages }}
 
-      ###################################################################### Download initramfs artifact from step 01 ######################################################################
+      ########## Download initramfs artifact from step 01 ##########
       - name: Download initramfs artifact
         uses: actions/download-artifact@v4
         with:
           name: initramfs-${{ matrix.arch }}
 
-      ###################################################################### Verify runtime assets ######################################################################
+      ########## Verify runtime assets ##########
       - name: Verify runtime assets
         run: |
           echo "[*] Verifying runtime assets..."
@@ -114,7 +115,7 @@ jobs:
           echo "INITRD_PATH=${INITRD}" >> $GITHUB_ENV
           echo "KERNEL_PATH=${KERNEL}" >> $GITHUB_ENV
 
-      ###################################################################### Extract kernel image ######################################################################
+      ########## Extract kernel image ##########
       # Uses pre-extracted binary from artifact - no need to unpack the deb again
       - name: Extract kernel image
         run: |
@@ -124,7 +125,7 @@ jobs:
           echo "=== KERNEL ==="
           ls -lh "linux-${{ matrix.arch }}"
 
-      ###################################################################### Create ISO tree ######################################################################
+      ########## Create ISO tree ##########
       - name: Create ISO tree
         run: |
           echo "[*] Creating ISO filesystem tree..."
@@ -133,7 +134,7 @@ jobs:
           cp "linux-${{ matrix.arch }}" iso/linux
           cp "${INITRD_PATH}" iso/
 
-      ###################################################################### Generate GRUB configuration ######################################################################
+      ########## Generate GRUB configuration ##########
       - name: Generate grub.cfg
         run: |
           INITRD_FILENAME=$(basename "${INITRD_PATH}")
@@ -156,13 +157,13 @@ jobs:
           echo "=== grub.cfg ==="
           cat iso/boot/grub/grub.cfg
 
-      ###################################################################### Build ISO ######################################################################
+      ########## Build ISO ##########
       - name: Build ISO image
         run: |
           echo "[*] Building bootable ISO..."
           grub-mkrescue -volid "SPEJDER_${{ matrix.arch }}" -o "${ISO_NAME}" iso/
 
-      ###################################################################### Verify ISO ######################################################################
+      ########## Verify ISO ##########
       - name: Verify ISO image
         run: |
           echo ""
@@ -175,7 +176,7 @@ jobs:
           echo "=== ISO CONTENTS ==="
           xorriso -indev "${ISO_NAME}" -ls / 2>/dev/null || true
 
-      ###################################################################### Upload ISO artifacts ######################################################################
+      ########## Upload ISO artifacts ##########
       - name: Upload ISO artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -183,7 +184,7 @@ jobs:
           path: |
             ${{ env.ISO_NAME }}
 
-      ###################################################################### Publish GitHub release ######################################################################
+      ########## Publish GitHub release ##########
       # ISO included in the same release as the initramfs and kernel from step 01
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -191,7 +192,6 @@ jobs:
           tag_name: v${{ env.RELEASE_VERSION }}
           body: |
             ## Spejder v${{ env.RELEASE_VERSION }}
-
             Minimal stateless hardware provisioning runtime built on Debian Trixie.
 
             ### Downloads
@@ -200,8 +200,8 @@ jobs:
             |------|-------------|-----|
             | `spejder-amd64-*.iso` | amd64 | Bootable ISO - burn to USB or mount in VM |
             | `spejder-arm64-*.iso` | arm64 | Bootable ISO - UEFI boot |
-            | `initramfs-amd64.cpio.gz` | amd64 | iPXE/PXE initramfs |
-            | `initramfs-arm64.cpio.gz` | arm64 | iPXE/PXE initramfs |
+            | `initramfs-amd64.cpio.zst` | amd64 | iPXE/PXE initramfs |
+            | `initramfs-arm64.cpio.zst` | arm64 | iPXE/PXE initramfs |
             | `linux-amd64` | amd64 | Extracted kernel binary for iPXE/PXE |
             | `linux-arm64` | arm64 | Extracted kernel binary for iPXE/PXE |
 
