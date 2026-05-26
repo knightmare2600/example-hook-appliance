@@ -58,8 +58,8 @@ Missing tools or absent hardware produce empty fields rather than aborting the r
 .
 ├── .github/
 │   └── workflows/
-│       ├── build-initramfs.yml # Builds initramfs for both arches
-│       └── pre-flight.yml      # Warms caches, commits kernel debs to sources/
+│       ├── build.yml        # Builds initramfs for both arches
+│       └── preflight.yml    # Warms caches, commits kernel debs to sources/
 ├── build/
 │   ├── build_packages.txt   # Packages for the CI build environment only
 │   ├── initrd_packages.txt  # Packages installed inside the initramfs
@@ -85,17 +85,44 @@ Missing tools or absent hardware produce empty fields rather than aborting the r
 │   └── locale.gen           # Single source of truth for locale generation
 │                            # (en_GB, da_DK, de_DE — everyone else can whistle)
 └── sources/
-    ├── *.deb                # Kernel debs committed by pre-flight.yml
-    └── firmware-*/          # Firmware deb cache (gitignored, populated by pre-flight)
+    ├── *.deb                # Kernel debs committed by preflight.yml
+    └── firmware-*/          # Firmware deb cache (gitignored, populated by preflight)
+```
+
+---
+
+## Getting started
+
+### Prerequisites
+
+This repo uses [Git LFS](https://git-lfs.github.com) to store kernel `.deb` files
+in `sources/`. Without LFS installed you'll get pointer files instead of the actual
+binaries and the build will fall back to downloading them.
+
+On Debian/Ubuntu:
+```bash
+sudo apt-get install git-lfs
+git lfs install
+```
+
+On macOS:
+```bash
+brew install git-lfs
+git lfs install
+```
+
+Fresh clone:
+```bash
+git clone https://github.com/knightmare2600/Spejder
+cd Spejder
+git lfs pull
 ```
 
 ---
 
 ## Build
 
-### First run / cache refresh
-
-Run **Pre-flight Cache Warmer** manually via Actions → `pre-flight.yml` → Run workflow.
+Run **Preflight Cache Warmer** manually via Actions → `preflight.yml` → Run workflow.
 
 This downloads the kernel debs for both arches, commits them to `sources/`, and
 pre-warms the firmware and apt package caches. Takes ~15 minutes but only needs
