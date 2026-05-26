@@ -1,7 +1,6 @@
 # localepurge configuration for Spejder provisioning runtime
 # Version history:
-# 0.1.0 - Initial config - keep en_GB, da_DK, de_DE only
-#          Everyone else can whistle Dixie
+# 0.1.0 - Initial config - keep en_GB, da_DK, de_DE only. Everyone else can whistle Dixie
 MANDELETE
 DONTBOTHERNEWLOCALE
 SHOWFREEDSPACE
