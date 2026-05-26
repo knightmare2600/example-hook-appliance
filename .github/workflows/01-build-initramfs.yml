@@ -2,18 +2,18 @@ name: (Step 01) Build Provisioning Runtime
 
 # Version history:
 # 0.1.0 - Initial workflow
-# 0.1.1 - Split packages.txt into shared/initrd/build lists; single-source locale.gen in shared/;
-#          strip locales package post-generation; move build deps out of hardcoded apt-get line
-# 0.1.2 - Enable non-free-firmware in chroot sources.list before package install;
-#          remove localepurge from build_packages.txt (Debian-only, not on Ubuntu runner)
+# 0.1.1 - Split packages.txt into shared/initrd/build lists; single-source locale.gen in shared/; strip locales package
+#         post-generation; move build deps out of hardcoded apt-get line
+# 0.1.2 - Enable non-free-firmware in chroot sources.list before package install; remove localepurge from
+#         build_packages.txt (Debian-only, not on Ubuntu runner)
 # 0.1.3 - Remove Install bootstrap init step; systemd is PID 1, no custom init script required
-# 0.1.4 - Add cache restore for kernel deb (from sources/), firmware debs, and rootfs apt packages;
-#          add kernel module count verification; add /init symlink to systemd;
-#          add tree to packages; add autofs4 modprobe alias; fix smbupload.service TTY allocation
-# 0.1.5 - Add SHA256 verification for kernel debs; detect and reject LFS pointer files;
-#          kernel_sha256 in matrix; initramfs-tools install/strip pattern for kernel dep;
-#          cleanup: remove kernel deb from /root, localepurge, strip man/doc
-# 0.1.6 - Add LFS storage safety valve; enable serial-getty@ttyS0;
+# 0.1.4 - Add cache restore for kernel deb (from sources/), firmware debs, and rootfs apt packages add kernel module
+#         count verification; add /init symlink to systemd; add tree to packages; add autofs4 modprobe alias; fix
+#         smbupload.service TTY allocation
+# 0.1.5 - Add SHA256 verification for kernel debs; detect & reject LFS pointer files; kernel_sha256 in matrix; initramfs-
+#         tools install/strip pattern for kernel dep; cleanup: remove kernel deb from /root, localepurge, strip man/doc
+# 0.1.6 - Add LFS storage safety valve
+# 0.1.7 - Revert to zstd -3 (2MB decompression RAM vs 64MB at -19); Node24 compat; v2 cache keys; enable serial-getty@ttyS0;
 #          publish extracted kernel binary in release; sudo tee for manifest write
 
 on:
@@ -23,7 +23,8 @@ permissions:
   contents: write
 
 env:
-  RELEASE_VERSION: 0.1.6
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RELEASE_VERSION: 0.1.7
 
 jobs:
 
@@ -58,13 +59,13 @@ jobs:
 
     steps:
 
-      ########### Checkout ###########
+      ########## Checkout ##########
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           lfs: true
 
-      ########### LFS storage safety valve ###########
+      ########## LFS storage safety valve ##########
       # Exit early if Git LFS storage is approaching the 1GB free tier limit
       - name: Check Git LFS storage usage
         run: |
@@ -91,14 +92,14 @@ jobs:
           fi
           echo "[*] LFS storage OK (${LFS_MB} MB / 900 MB threshold)"
 
-      ########### Build host apt cache ###########
+      ########## Build host apt cache ##########
       - name: Restore build host apt cache
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives/*.deb
-          key: build-apt-${{ hashFiles('build/build_packages.txt', 'build/shared_packages.txt') }}
-          restore-keys: build-apt-
+          key: build-apt-v2-${{ hashFiles('build/build_packages.txt', 'build/shared_packages.txt') }}
+          restore-keys: build-apt-v2-
 
       - name: Install build dependencies
         run: |
@@ -106,14 +107,14 @@ jobs:
           sudo apt-get install -y $(grep -v '^\s*#' build/build_packages.txt | grep -v '^\s*$' | tr -d '\r')
           sudo apt-get install -y $(grep -v '^\s*#' build/shared_packages.txt | grep -v '^\s*$' | tr -d '\r')
 
-      ########### Working directories ###########
+      ########## Working directories ##########
       - name: Create working directories
         run: |
           sudo rm -rf rootfs initrd-tree
           mkdir -p rootfs
           mkdir -p initrd-tree
 
-      ########### Bootstrap Debian ###########
+      ########## Bootstrap Debian ##########
       - name: Bootstrap Debian rootfs
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
@@ -126,7 +127,7 @@ jobs:
             sudo debootstrap --arch=amd64 --variant=minbase ${DEBIAN_RELEASE} rootfs ${DEBIAN_MIRROR}
           fi
 
-      ########### Verify bootstrap ###########
+      ########## Verify bootstrap ##########
       - name: Verify bootstrap
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -137,7 +138,7 @@ jobs:
             ls -l /bin/bash
           "
 
-      ########### Mount chroot filesystems ###########
+      ########## Mount chroot filesystems ##########
       - name: Mount chroot filesystems
         run: |
           sudo mount --bind /dev rootfs/dev
@@ -145,7 +146,7 @@ jobs:
           sudo mount --bind /sys rootfs/sys
           sudo mount --bind /dev/pts rootfs/dev/pts
 
-      ########### Kernel deb - restore from sources/ or download, always SHA256 verified ###########
+      ########## Kernel deb - restore from sources/ or download, always SHA256 verified ##########
       # Checksums sourced from packages.debian.org - update alongside kernel version bumps
       # LFS pointer files (< 1MB) are detected and rejected automatically
       - name: Restore or download kernel deb
@@ -195,7 +196,7 @@ jobs:
 
           echo "[*] Kernel deb ready: $(wc -c < "${KERNEL_DEB}") bytes"
 
-      ########### Extract kernel binary for release publishing ###########
+      ########## Extract kernel binary for release publishing ##########
       # Uses pre-extracted binary from sources/ if available (put there by preflight)
       # Falls back to extracting from deb if needed
       - name: Extract kernel binary
@@ -217,23 +218,23 @@ jobs:
           fi
           echo "[*] Kernel binary: $(ls -lh linux-${{ matrix.arch }})"
 
-      ########### Firmware deb cache ###########
+      ########## Firmware deb cache ##########
       - name: Restore firmware deb cache
         uses: actions/cache@v4
         id: firmware_cache
         with:
           path: sources/firmware-${{ matrix.arch }}
-          key: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-${{ hashFiles('build/initrd_packages.txt') }}
-          restore-keys: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-
+          key: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-v2-${{ hashFiles('build/initrd_packages.txt') }}
+          restore-keys: firmware-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-v2-
 
-      ########### Rootfs apt cache ###########
+      ########## Rootfs apt cache ##########
       - name: Restore rootfs apt cache
         uses: actions/cache@v4
         id: rootfs_apt_cache
         with:
           path: sources/rootfs-apt-${{ matrix.arch }}
-          key: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-${{ hashFiles('build/shared_packages.txt', 'build/initrd_packages.txt') }}
-          restore-keys: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-
+          key: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-v2-${{ hashFiles('build/shared_packages.txt', 'build/initrd_packages.txt') }}
+          restore-keys: rootfs-apt-${{ matrix.arch }}-${{ env.DEBIAN_RELEASE }}-v2-
 
       - name: Seed rootfs apt cache into chroot
         run: |
@@ -257,7 +258,7 @@ jobs:
             echo "[*] No cached firmware debs found - apt will download fresh"
           fi
 
-      ########### Install shared + initrd packages ###########
+      ########## Install shared + initrd packages ##########
       - name: Install runtime packages
         run: |
           sudo cp build/shared_packages.txt rootfs/root/shared_packages.txt
@@ -272,12 +273,12 @@ jobs:
             apt-get clean
           "
 
-      ########### Apply overlay ###########
+      ########## Apply overlay ##########
       - name: Apply overlay
         run: |
           sudo rsync -a --chown=root:root overlay/ rootfs/
 
-      ########### Fix overlay permissions ###########
+      ########## Fix overlay permissions ##########
       - name: Fix overlay permissions
         run: |
           sudo chmod +x rootfs/usr/local/bin/hwcollect.sh
@@ -286,7 +287,7 @@ jobs:
           sudo chmod +x rootfs/usr/local/bin/spejder-keyboard.sh
           sudo chmod +x rootfs/etc/profile.d/spejder-keyboard.sh
 
-      ########### Generate locales ###########
+      ########## Generate locales ##########
       - name: Generate locales
         run: |
           sudo cp shared/locale.gen rootfs/etc/locale.gen
@@ -297,7 +298,7 @@ jobs:
           echo "[*] Verifying generated locale data:"
           sudo ls -lah rootfs/usr/lib/locale/
 
-      ########### Strip locales package (keep generated data) ###########
+      ########## Strip locales package (keep generated data) ##########
       # Back up the generated locale data before removing the package
       # postrm scripts on Trixie remove /usr/lib/locale/ contents on package removal
       - name: Strip locales package
@@ -316,7 +317,7 @@ jobs:
           echo "[*] Verifying locale data survived strip:"
           sudo ls -lah rootfs/usr/lib/locale/
 
-      ########### Machine ID - write uninitialized so each machine generates its own on first boot ###########
+      ########## Machine ID - write uninitialized so each machine generates its own on first boot ##########
       # systemd-machine-id-setup would commit a build-time ID shared across all deployments
       # Writing "uninitialized" causes systemd to generate a unique ID on first boot per machine
       - name: Set machine-id to uninitialized
@@ -324,7 +325,7 @@ jobs:
           echo "uninitialized" | sudo tee rootfs/etc/machine-id > /dev/null
           echo "[*] machine-id set to uninitialized - will be generated uniquely on first boot"
 
-      ########### Install kernel package ###########
+      ########## Install kernel package ##########
       - name: Install kernel package
         run: |
           sudo cp "${{ matrix.kernel_deb }}" rootfs/root/
@@ -340,7 +341,7 @@ jobs:
           echo "[*] Module tree from outside chroot:"
           sudo find rootfs/lib/modules/ -maxdepth 2 -type d 2>/dev/null || echo "No module dirs found"
 
-      ########### Verify kernel modules ###########
+      ########## Verify kernel modules ##########
       - name: Verify kernel modules
         run: |
           MODULE_COUNT=$(sudo find rootfs/lib/modules/ -name '*.ko*' 2>/dev/null | wc -l)
@@ -352,18 +353,18 @@ jobs:
           fi
           echo "[*] Kernel module verification passed"
 
-      ########### Generate module dependencies ###########
+      ########## Generate module dependencies ##########
       - name: Generate depmod
         run: |
           sudo chroot rootfs depmod -a "${{ matrix.kernel_version }}"
 
-      ########### Remove duplicate boot kernel ###########
+      ########## Remove duplicate boot kernel ##########
       - name: Remove embedded boot kernel
         run: |
           sudo rm -f rootfs/boot/vmlinuz-* || true
           sudo rm -f rootfs/boot/initrd.img-* || true
 
-      ########### Strip initramfs-tools after depmod - bypass postrm hooks to prevent kernel cascade removal ###########
+      ########## Strip initramfs-tools after depmod - bypass postrm hooks to prevent kernel cascade removal ##########
       # apt-get remove triggers postrm hooks that cascade-remove the kernel via update-initramfs
       # dpkg --remove --no-triggers bypasses that chain entirely
       # Modules in /lib/modules/ are NOT owned by initramfs-tools so they survive
@@ -383,7 +384,7 @@ jobs:
             find /lib/modules/ -name '*.ko*' | wc -l
           "
 
-      ########### Enable services ###########
+      ########## Enable services ##########
       - name: Enable services
         run: |
           sudo chroot rootfs systemctl enable ssh || sudo chroot rootfs systemctl enable sshd || true
@@ -401,13 +402,13 @@ jobs:
           sudo chroot rootfs systemctl mask systemd-firstboot.service
           sudo chroot rootfs systemctl mask ipmievd.service
 
-      ########### Write installed package manifest ###########
+      ########## Write installed package manifest ##########
       - name: Write installed package manifest
         run: |
           sudo chroot rootfs /bin/bash -c "dpkg -l" | sudo tee rootfs/root/installed-manifest.txt > /dev/null
           echo "[*] Manifest written - $(sudo grep -c '^ii' rootfs/root/installed-manifest.txt) packages installed"
 
-      ########### Cleanup ###########
+      ########## Cleanup ##########
       - name: Cleanup image
         run: |
           sudo chroot rootfs /bin/bash -c "
@@ -429,7 +430,7 @@ jobs:
             du -h --max-depth=1 / 2>/dev/null | sort -rh | head -20
           "
 
-      ########### Unmount chroot filesystems ###########
+      ########## Unmount chroot filesystems ##########
       - name: Unmount chroot filesystems
         run: |
           sudo umount rootfs/dev/pts || true
@@ -437,18 +438,12 @@ jobs:
           sudo umount rootfs/proc || true
           sudo umount rootfs/sys || true
 
-      ########### Copy rootfs ###########
+      ########## Copy rootfs ##########
       - name: Copy rootfs
         run: |
-          sudo rsync -aHAX --numeric-ids \
-            --exclude=/proc/* \
-            --exclude=/sys/* \
-            --exclude=/dev/* \
-            --exclude=/run/* \
-            --exclude=/tmp/* \
-            rootfs/ initrd-tree/
+          sudo rsync -aHAX --numeric-ids --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/* --exclude=/tmp/* rootfs/ initrd-tree/
 
-      ########### Install /init symlink to systemd ###########
+      ########## Install /init symlink to systemd ##########
       - name: Install init symlink
         run: |
           if [ -f "initrd-tree/usr/lib/systemd/systemd" ]; then
@@ -462,7 +457,7 @@ jobs:
           echo "[*] /init symlink:"
           sudo ls -la initrd-tree/init
 
-      ########### Runtime directories ###########
+      ########## Runtime directories ##########
       - name: Create runtime directories
         run: |
           sudo mkdir -p initrd-tree/run
@@ -472,7 +467,7 @@ jobs:
           sudo mkdir -p initrd-tree/var/run/sshd
           sudo mkdir -p initrd-tree/sys/fs/cgroup
 
-      ########### Device nodes ###########
+      ########## Device nodes ##########
       - name: Create device nodes
         run: |
           sudo mkdir -p initrd-tree/dev
@@ -480,17 +475,18 @@ jobs:
           sudo mknod -m 666 initrd-tree/dev/null c 1 3 || true
           sudo mknod -m 666 initrd-tree/dev/tty c 5 0 || true
 
-      ########### Build initramfs ###########
-      # zstd gives ~20-30% better compression than gzip AND faster decompression at boot
-      # Kernel 6.12 has CONFIG_RD_ZSTD=y so this is fully supported
-      # Note: update iPXE/GRUB configs if changing the filename extension
+      ########## Build initramfs ##########
+      ########## Build initramfs ##########
+      # zstd -3 gives better compression than gzip with minimal decompression memory (~2MB vs 64MB at -19)
+      # Requires minimum ~2GB RAM on target - bare metal servers have this comfortably
+      # Kernel 6.12 has CONFIG_RD_ZSTD=y
       - name: Build initramfs
         run: |
           cd initrd-tree
-          sudo find . -print0 | sudo cpio --null -ov --format=newc | sudo zstd -19 -T0 | sudo tee ../initramfs-${{ matrix.arch }}.cpio.zst > /dev/null
+          sudo find . -print0 | sudo cpio --null -ov --format=newc | sudo zstd -3 -T0 | sudo tee ../initramfs-${{ matrix.arch }}.cpio.zst > /dev/null
           echo "[*] initramfs size: $(ls -lh ../initramfs-${{ matrix.arch }}.cpio.zst | awk '{print $5}')"
 
-      ########### Organise artifacts into spejder/${ipxe_arch}/ structure ###########
+      ########## Organise artifacts into spejder/${ipxe_arch}/ structure ##########
       - name: Organise artifacts
         run: |
           mkdir -p spejder/${{ matrix.ipxe_arch }}
@@ -499,7 +495,7 @@ jobs:
           echo "[*] Artifact layout:"
           ls -lh spejder/${{ matrix.ipxe_arch }}/
 
-      ########### Upload artifacts ###########
+      ########## Upload artifacts ##########
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -508,7 +504,7 @@ jobs:
             spejder/${{ matrix.ipxe_arch }}/linux-${{ matrix.ipxe_arch }}
             spejder/${{ matrix.ipxe_arch }}/initramfs-${{ matrix.ipxe_arch }}.cpio.zst
 
-      ########### Publish release ###########
+      ########## Publish release ##########
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
