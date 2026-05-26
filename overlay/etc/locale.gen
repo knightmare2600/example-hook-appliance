@@ -1,0 +1,6 @@
+# Single source of truth for locale generation. Used by the build workflow; everyone else can whistle Dixie
+# Version history:
+# 0.1.0 - Initial file; replaces overlay/etc/locale.gen
+en_GB.UTF-8 UTF-8
+da_DK.UTF-8 UTF-8
+de_DE.UTF-8 UTF-8
