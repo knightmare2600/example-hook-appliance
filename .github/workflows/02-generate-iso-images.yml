@@ -9,16 +9,22 @@ name: (Step 02) Build Spejder ISO Images
 # 0.1.5 - Add ISO verification and prettier logging
 # 0.1.6 - Add LFS storage safety valve; use pre-extracted kernel binary from sources/
 # 0.2.0 - Reworked ISO pipeline to consume GitHub Release assets instead of Actions artifacts
+# 0.2.1 - Added release validation and workflow_dispatch release selection
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing GitHub release tag to consume (example: v0.1.7)"
+        required: true
+        default: "v0.1.7"
 
 permissions:
   contents: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  RELEASE_VERSION: 0.2.0
+  RELEASE_VERSION: ${{ inputs.release_tag }}
 
 jobs:
 
@@ -55,24 +61,41 @@ jobs:
       ########## Define ISO filename ##########
       - name: Define ISO filename
         run: |
-          echo "ISO_NAME=${{ matrix.iso_basename }}-${RELEASE_VERSION}.iso" >> $GITHUB_ENV
+          VERSION_CLEAN="${RELEASE_VERSION#v}"
+
+          echo "VERSION_CLEAN=${VERSION_CLEAN}" >> $GITHUB_ENV
+          echo "ISO_NAME=${{ matrix.iso_basename }}-${VERSION_CLEAN}.iso" >> $GITHUB_ENV
+
+          echo ""
+          echo "=== BUILD INFO ==="
+          echo "Release tag : ${RELEASE_VERSION}"
+          echo "ISO filename: ${{ matrix.iso_basename }}-${VERSION_CLEAN}.iso"
 
       ########## Install ISO build dependencies ##########
       - name: Install ISO build dependencies
         run: |
           echo "[*] Installing ISO build dependencies..."
-
           sudo apt-get update
           sudo apt-get install -y xorriso mtools grub-common grub2-common grub-pc-bin grub-efi-amd64-bin dpkg-dev gh
 
-      ########## Download runtime assets from GitHub Release ##########
+      ########## Verify release exists ##########
+      - name: Verify GitHub release exists
+        run: |
+          echo "[*] Checking release ${RELEASE_VERSION}..."
+          gh release view "${RELEASE_VERSION}"
+          echo ""
+          echo "=== RELEASE ASSETS ==="
+          gh release view "${RELEASE_VERSION}" --json assets --jq '.assets[].name'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      ########## Download runtime assets ##########
       - name: Download runtime assets from release
         run: |
           echo "[*] Downloading runtime assets from GitHub Release..."
           mkdir -p "spejder/${{ matrix.ipxe_arch }}"
-          gh release download "v${RELEASE_VERSION}" --pattern "initramfs-${{ matrix.arch }}.cpio.zst" --dir "spejder/${{ matrix.ipxe_arch }}"
-          gh release download "v${RELEASE_VERSION}" --pattern "linux-${{ matrix.arch }}" --dir "spejder/${{ matrix.ipxe_arch }}"
-
+          gh release download "${RELEASE_VERSION}" --pattern "initramfs-${{ matrix.arch }}.cpio.zst" --dir "spejder/${{ matrix.ipxe_arch }}"
+          gh release download "${RELEASE_VERSION}" --pattern "linux-${{ matrix.arch }}" --dir "spejder/${{ matrix.ipxe_arch }}"
           echo ""
           echo "=== DOWNLOADED FILES ==="
           find spejder -type f -ls
@@ -83,15 +106,12 @@ jobs:
       - name: Verify runtime assets
         run: |
           echo "[*] Verifying runtime assets..."
-
           INITRD=$(find spejder -name "*.cpio.zst" | head -n1)
           KERNEL=$(find spejder -name "linux-*" | head -n1)
-
           test -f "${INITRD}" || {
             echo "[!] ERROR: initramfs missing"
             exit 1
           }
-
           test -f "${KERNEL}" || {
             echo "[!] ERROR: kernel missing"
             exit 1
@@ -99,7 +119,6 @@ jobs:
 
           echo "INITRD_PATH=${INITRD}" >> $GITHUB_ENV
           echo "KERNEL_PATH=${KERNEL}" >> $GITHUB_ENV
-
           echo ""
           echo "=== INITRAMFS ==="
           ls -lh "${INITRD}"
@@ -130,13 +149,13 @@ jobs:
           set default=0
 
           menuentry "Spejder - Hardware Provisioning Runtime (${{ matrix.arch }})" {
-              linux /linux console=${{ matrix.serial_console }},115200 console=tty0 rw net.ifnames=0 biosdevname=0 quiet
-              initrd /${INITRD_FILENAME}
+            linux /linux console=${{ matrix.serial_console }},115200 console=tty0 rw net.ifnames=0 biosdevname=0 quiet
+            initrd /${INITRD_FILENAME}
           }
 
           menuentry "Spejder - Verbose boot (${{ matrix.arch }})" {
-              linux /linux console=${{ matrix.serial_console }},115200 console=tty0 rw net.ifnames=0 biosdevname=0
-              initrd /${INITRD_FILENAME}
+            linux /linux console=${{ matrix.serial_console }},115200 console=tty0 rw net.ifnames=0 biosdevname=0
+            initrd /${INITRD_FILENAME}
           }
           EOF
 
@@ -156,11 +175,9 @@ jobs:
           echo ""
           echo "=== ISO FILE ==="
           ls -lh "${ISO_NAME}"
-
           echo ""
           echo "=== FILE TYPE ==="
           file "${ISO_NAME}"
-
           echo ""
           echo "=== ISO CONTENTS ==="
           xorriso -indev "${ISO_NAME}" -ls / 2>/dev/null || true
@@ -173,11 +190,11 @@ jobs:
           path: |
             ${{ env.ISO_NAME }}
 
-      ########## Publish ISO to GitHub Release ##########
-      - name: Publish GitHub release assets
+      ########## Publish ISO to existing GitHub Release ##########
+      - name: Publish ISO to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.RELEASE_VERSION }}
+          tag_name: ${{ env.RELEASE_VERSION }}
           files: |
             ${{ env.ISO_NAME }}
         env:
