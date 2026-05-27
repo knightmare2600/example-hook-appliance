@@ -10,6 +10,7 @@ name: (Step 02) Build Spejder ISO Images
 # 0.1.6 - Add LFS storage safety valve; use pre-extracted kernel binary from sources/
 # 0.2.0 - Reworked ISO pipeline to consume GitHub Release assets instead of Actions artifacts
 # 0.2.1 - Added release validation and workflow_dispatch release selection
+# 0.2.2 - Align ISO workflow architecture naming with runtime workflow via ipxe_arch
 
 on:
   workflow_dispatch:
@@ -65,7 +66,6 @@ jobs:
 
           echo "VERSION_CLEAN=${VERSION_CLEAN}" >> $GITHUB_ENV
           echo "ISO_NAME=${{ matrix.iso_basename }}-${VERSION_CLEAN}.iso" >> $GITHUB_ENV
-
           echo ""
           echo "=== BUILD INFO ==="
           echo "Release tag : ${RELEASE_VERSION}"
@@ -94,8 +94,19 @@ jobs:
         run: |
           echo "[*] Downloading runtime assets from GitHub Release..."
           mkdir -p "spejder/${{ matrix.ipxe_arch }}"
-          gh release download "${RELEASE_VERSION}" --pattern "initramfs-${{ matrix.arch }}.cpio.zst" --dir "spejder/${{ matrix.ipxe_arch }}"
-          gh release download "${RELEASE_VERSION}" --pattern "linux-${{ matrix.arch }}" --dir "spejder/${{ matrix.ipxe_arch }}"
+
+          echo ""
+          echo "=== AVAILABLE ASSETS ==="
+          gh release view "${RELEASE_VERSION}" --json assets --jq '.assets[].name'
+
+          echo ""
+          echo "=== DOWNLOADING INITRAMFS ==="
+          gh release download "${RELEASE_VERSION}" --pattern "initramfs-${{ matrix.ipxe_arch }}*" --dir "spejder/${{ matrix.ipxe_arch }}"
+
+          echo ""
+          echo "=== DOWNLOADING KERNEL ==="
+          gh release download "${RELEASE_VERSION}" --pattern "linux-${{ matrix.ipxe_arch }}*" --dir "spejder/${{ matrix.ipxe_arch }}"
+
           echo ""
           echo "=== DOWNLOADED FILES ==="
           find spejder -type f -ls
@@ -108,10 +119,12 @@ jobs:
           echo "[*] Verifying runtime assets..."
           INITRD=$(find spejder -name "*.cpio.zst" | head -n1)
           KERNEL=$(find spejder -name "linux-*" | head -n1)
+
           test -f "${INITRD}" || {
             echo "[!] ERROR: initramfs missing"
             exit 1
           }
+
           test -f "${KERNEL}" || {
             echo "[!] ERROR: kernel missing"
             exit 1
@@ -119,6 +132,7 @@ jobs:
 
           echo "INITRD_PATH=${INITRD}" >> $GITHUB_ENV
           echo "KERNEL_PATH=${KERNEL}" >> $GITHUB_ENV
+
           echo ""
           echo "=== INITRAMFS ==="
           ls -lh "${INITRD}"
@@ -127,7 +141,7 @@ jobs:
           echo "=== KERNEL ==="
           ls -lh "${KERNEL}"
 
-      ########## Create ISO filesystem tree ##########
+      ########## Create ISO tree ##########
       - name: Create ISO tree
         run: |
           echo "[*] Creating ISO filesystem tree..."
@@ -147,7 +161,6 @@ jobs:
           cat > iso/boot/grub/grub.cfg << EOF
           set timeout=5
           set default=0
-
           menuentry "Spejder - Hardware Provisioning Runtime (${{ matrix.arch }})" {
             linux /linux console=${{ matrix.serial_console }},115200 console=tty0 rw net.ifnames=0 biosdevname=0 quiet
             initrd /${INITRD_FILENAME}
