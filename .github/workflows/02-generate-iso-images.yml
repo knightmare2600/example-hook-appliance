@@ -8,6 +8,7 @@ name: (Step 02) Build Spejder ISO Images
 # 0.1.4 - Extract kernels directly from verified Debian kernel packages in sources/
 # 0.1.5 - Add ISO verification and prettier logging
 # 0.1.6 - Add LFS storage safety valve; use pre-extracted kernel binary from sources/
+# 0.2.0 - Reworked ISO pipeline to consume GitHub Release assets instead of Actions artifacts
 
 on:
   workflow_dispatch: {}
@@ -17,7 +18,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  RELEASE_VERSION: 0.1.7
+  RELEASE_VERSION: 0.2.0
 
 jobs:
 
@@ -36,105 +37,90 @@ jobs:
             ipxe_arch: x86_64
             iso_basename: spejder-amd64
             serial_console: ttyS0
-            grub_packages: grub-pc-bin grub-efi-amd64-bin
 
           ########## ARM64 ##########
           - arch: arm64
             ipxe_arch: arm64
             iso_basename: spejder-arm64
             serial_console: ttyAMA0
-            grub_packages: grub-efi-arm64-bin
 
     steps:
 
-      ########## Checkout ##########
+      ########## Checkout repository ##########
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           lfs: true
-
-      ########## LFS storage safety valve ##########
-      # Exit early if Git LFS storage is approaching the 1GB free tier limit
-      - name: Check Git LFS storage usage
-        run: |
-          echo "[*] Checking Git LFS storage usage..."
-          LFS_BYTES=$(git lfs ls-files -s 2>/dev/null | awk '{
-            val=$NF; unit=$(NF-1)
-            if (unit == "MB") val=val*1024*1024
-            else if (unit == "GB") val=val*1024*1024*1024
-            else if (unit == "KB") val=val*1024
-            sum+=val
-          } END {printf "%.0f", sum}')
-          LFS_MB=$((LFS_BYTES / 1024 / 1024))
-          echo "[*] Current LFS usage: ${LFS_MB} MB"
-          if [ "${LFS_MB}" -gt 900 ]; then
-            echo ""
-            echo "============================================================"
-            echo "WARNING: Git LFS storage is ${LFS_MB} MB - approaching 1GB limit"
-            echo "Free tier limit is 1GB. Please:"
-            echo "  1. Remove old kernel debs from sources/ with git rm"
-            echo "  2. Run: git lfs prune"
-            echo "  3. Push the cleanup before running this workflow again"
-            echo "============================================================"
-            exit 1
-          fi
-          echo "[*] LFS storage OK (${LFS_MB} MB / 900 MB threshold)"
 
       ########## Define ISO filename ##########
       - name: Define ISO filename
         run: |
           echo "ISO_NAME=${{ matrix.iso_basename }}-${RELEASE_VERSION}.iso" >> $GITHUB_ENV
 
-      ########## Install build dependencies ##########
+      ########## Install ISO build dependencies ##########
       - name: Install ISO build dependencies
         run: |
           echo "[*] Installing ISO build dependencies..."
-          sudo apt-get update
-          sudo apt-get install -y xorriso mtools grub-common grub2-common dpkg-dev ${{ matrix.grub_packages }}
 
-      ########## Download initramfs artifact from step 01 ##########
-      - name: Download initramfs artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: initramfs-${{ matrix.arch }}
+          sudo apt-get update
+          sudo apt-get install -y xorriso mtools grub-common grub2-common grub-pc-bin grub-efi-amd64-bin grub-efi-arm64 dpkg-dev gh
+
+      ########## Download runtime assets from GitHub Release ##########
+      - name: Download runtime assets from release
+        run: |
+          echo "[*] Downloading runtime assets from GitHub Release..."
+          mkdir -p "spejder/${{ matrix.ipxe_arch }}"
+          gh release download "v${RELEASE_VERSION}" --pattern "initramfs-${{ matrix.arch }}.cpio.zst" --dir "spejder/${{ matrix.ipxe_arch }}"
+          gh release download "v${RELEASE_VERSION}" --pattern "linux-${{ matrix.arch }}" --dir "spejder/${{ matrix.ipxe_arch }}"
+
+          echo ""
+          echo "=== DOWNLOADED FILES ==="
+          find spejder -type f -ls
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       ########## Verify runtime assets ##########
       - name: Verify runtime assets
         run: |
           echo "[*] Verifying runtime assets..."
-          INITRD="spejder/${{ matrix.ipxe_arch }}/initramfs-${{ matrix.ipxe_arch }}.cpio.zst"
-          KERNEL="spejder/${{ matrix.ipxe_arch }}/linux-${{ matrix.ipxe_arch }}"
-          test -f "${INITRD}" || { echo "[!] ERROR: initramfs not found at ${INITRD}"; exit 1; }
-          test -f "${KERNEL}" || { echo "[!] ERROR: kernel not found at ${KERNEL}"; exit 1; }
-          echo ""
-          echo "=== KERNEL ==="
-          ls -lh "${KERNEL}"
-          echo ""
-          echo "=== INITRAMFS ==="
-          ls -lh "${INITRD}"
+
+          INITRD=$(find spejder -name "*.cpio.zst" | head -n1)
+          KERNEL=$(find spejder -name "linux-*" | head -n1)
+
+          test -f "${INITRD}" || {
+            echo "[!] ERROR: initramfs missing"
+            exit 1
+          }
+
+          test -f "${KERNEL}" || {
+            echo "[!] ERROR: kernel missing"
+            exit 1
+          }
+
           echo "INITRD_PATH=${INITRD}" >> $GITHUB_ENV
           echo "KERNEL_PATH=${KERNEL}" >> $GITHUB_ENV
 
-      ########## Extract kernel image ##########
-      # Uses pre-extracted binary from artifact - no need to unpack the deb again
-      - name: Extract kernel image
-        run: |
-          echo "[*] Using kernel binary from artifact..."
-          cp "${KERNEL_PATH}" "linux-${{ matrix.arch }}"
+          echo ""
+          echo "=== INITRAMFS ==="
+          ls -lh "${INITRD}"
+
           echo ""
           echo "=== KERNEL ==="
-          ls -lh "linux-${{ matrix.arch }}"
+          ls -lh "${KERNEL}"
 
-      ########## Create ISO tree ##########
+      ########## Create ISO filesystem tree ##########
       - name: Create ISO tree
         run: |
           echo "[*] Creating ISO filesystem tree..."
           rm -rf iso
           mkdir -p iso/boot/grub
-          cp "linux-${{ matrix.arch }}" iso/linux
+          cp "${KERNEL_PATH}" iso/linux
           cp "${INITRD_PATH}" iso/
+          echo ""
+          echo "=== ISO TREE ==="
+          find iso -type f -ls
 
-      ########## Generate GRUB configuration ##########
+      ########## Generate grub.cfg ##########
       - name: Generate grub.cfg
         run: |
           INITRD_FILENAME=$(basename "${INITRD_PATH}")
@@ -153,6 +139,7 @@ jobs:
               initrd /${INITRD_FILENAME}
           }
           EOF
+
           echo ""
           echo "=== grub.cfg ==="
           cat iso/boot/grub/grub.cfg
@@ -161,7 +148,7 @@ jobs:
       - name: Build ISO image
         run: |
           echo "[*] Building bootable ISO..."
-          grub-mkrescue -volid "SPEJDER_${{ matrix.arch }}" -o "${ISO_NAME}" iso/
+          grub-mkrescue --compress=xz -volid "SPEJDER_${{ matrix.arch }}" -o "${ISO_NAME}" iso/
 
       ########## Verify ISO ##########
       - name: Verify ISO image
@@ -169,44 +156,28 @@ jobs:
           echo ""
           echo "=== ISO FILE ==="
           ls -lh "${ISO_NAME}"
+
           echo ""
           echo "=== FILE TYPE ==="
           file "${ISO_NAME}"
+
           echo ""
           echo "=== ISO CONTENTS ==="
           xorriso -indev "${ISO_NAME}" -ls / 2>/dev/null || true
 
-      ########## Upload ISO artifacts ##########
-      - name: Upload ISO artifacts
+      ########## Upload ISO artifact ##########
+      - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: spejder-${{ matrix.arch }}-iso
           path: |
             ${{ env.ISO_NAME }}
 
-      ########## Publish GitHub release ##########
-      # ISO included in the same release as the initramfs and kernel from step 01
-      - name: Publish GitHub release
+      ########## Publish ISO to GitHub Release ##########
+      - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
-          body: |
-            ## Spejder v${{ env.RELEASE_VERSION }}
-            Minimal stateless hardware provisioning runtime built on Debian Trixie.
-
-            ### Downloads
-
-            | File | Architecture | Use |
-            |------|-------------|-----|
-            | `spejder-amd64-*.iso` | amd64 | Bootable ISO - burn to USB or mount in VM |
-            | `spejder-arm64-*.iso` | arm64 | Bootable ISO - UEFI boot |
-            | `initramfs-amd64.cpio.zst` | amd64 | iPXE/PXE initramfs |
-            | `initramfs-arm64.cpio.zst` | arm64 | iPXE/PXE initramfs |
-            | `linux-amd64` | amd64 | Extracted kernel binary for iPXE/PXE |
-            | `linux-arm64` | arm64 | Extracted kernel binary for iPXE/PXE |
-
-            ### iPXE boot
-            See `ipxe/discovery.ipxe` in the repository.
           files: |
             ${{ env.ISO_NAME }}
         env:
