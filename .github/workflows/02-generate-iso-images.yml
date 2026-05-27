@@ -63,7 +63,7 @@ jobs:
           echo "[*] Installing ISO build dependencies..."
 
           sudo apt-get update
-          sudo apt-get install -y xorriso mtools grub-common grub2-common grub-pc-bin grub-efi-amd64-bin grub-efi-arm64 dpkg-dev gh
+          sudo apt-get install -y xorriso mtools grub-common grub2-common grub-pc-bin grub-efi-amd64-bin dpkg-dev gh
 
       ########## Download runtime assets from GitHub Release ##########
       - name: Download runtime assets from release
